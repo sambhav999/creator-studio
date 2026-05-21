@@ -6,6 +6,7 @@ import morgan from "morgan";
 import { dashboardRouter } from "./routes/dashboardRoutes.js";
 import { gameRouter } from "./routes/gameRoutes.js";
 import { templateRouter } from "./routes/templateRoutes.js";
+import { getDatabaseConfig } from "./services/databaseService.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 
 dotenv.config();
@@ -23,7 +24,8 @@ app.get("/api/health", (_request, response) => {
   response.json({
     ok: true,
     service: "kult-creator-studio-api",
-    strategy: "template-first-ai-optional"
+    strategy: "template-first-ai-optional",
+    database: getDatabaseConfig()
   });
 });
 

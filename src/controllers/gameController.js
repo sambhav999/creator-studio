@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { saveGamePackage } from "../services/databaseService.js";
 import { createGamePackage } from "../services/gameFactoryService.js";
 import { createRefinementBundle } from "../services/refinementService.js";
 
@@ -17,11 +18,12 @@ const refineSchema = z.object({
   refinementLevel: z.string().optional()
 });
 
-export function createGame(request, response, next) {
+export async function createGame(request, response, next) {
   try {
     const input = createSchema.parse(request.body);
     const game = createGamePackage(input);
-    response.status(201).json({ game });
+    const persistence = await saveGamePackage(game);
+    response.status(201).json({ game, persistence });
   } catch (error) {
     next(error);
   }

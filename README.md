@@ -31,7 +31,8 @@ CORS_ORIGIN=http://localhost:5173
 OPENAI_API_KEY=
 LLM_PROVIDER=openai
 LLM_MODEL=gpt-4.1-mini
-MONGODB_URI=mongodb://localhost:27017/kult-creator-studio
+MONGODB_URI=mongodb://localhost:27017/prompt_creator_studio
+MONGODB_COLLECTION=prompt_creator_studio
 REDIS_URL=redis://localhost:6379
 IPFS_API_URL=
 IPFS_API_KEY=
@@ -40,6 +41,8 @@ WEB3_PROVIDER_URL=
 CONTRACT_ADDRESS=
 JWT_SECRET=change-this-local-secret
 ```
+
+`MONGODB_URI` can point at a local MongoDB database or an Atlas database. Generated game packages are saved to the collection configured by `MONGODB_COLLECTION`.
 
 ## API Routes
 
