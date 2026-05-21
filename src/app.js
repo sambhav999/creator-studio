@@ -20,6 +20,22 @@ app.use(cors({
 app.use(express.json({ limit: "1mb" }));
 app.use(morgan("dev"));
 
+app.get("/", (_request, response) => {
+  response.json({
+    ok: true,
+    service: "kult-creator-studio-api",
+    message: "Backend is running. Use the /api routes for data.",
+    endpoints: {
+      health: "/api/health",
+      templates: "/api/templates",
+      createGame: "/api/games/create",
+      refineGame: "/api/games/refine",
+      dashboard: "/api/dashboard"
+    },
+    database: getDatabaseConfig()
+  });
+});
+
 app.get("/api/health", (_request, response) => {
   response.json({
     ok: true,
