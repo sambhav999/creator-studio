@@ -15,7 +15,8 @@ export const app = express();
 
 app.use(helmet());
 app.use(cors({
-  origin: process.env.CORS_ORIGIN?.split(",").map(origin => origin.trim()) ?? true
+  origin: process.env.CORS_ORIGIN?.split(",").map(origin => origin.trim()) ?? true,
+  exposedHeaders: ["Content-Disposition"]
 }));
 app.use(express.json({ limit: "1mb" }));
 app.use(morgan("dev"));
@@ -30,6 +31,7 @@ app.get("/", (_request, response) => {
       templates: "/api/templates",
       createGame: "/api/games/create",
       refineGame: "/api/games/refine",
+      exportCode: "/api/games/export-code",
       dashboard: "/api/dashboard"
     },
     database: getDatabaseConfig()

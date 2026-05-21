@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { buildGameCodeZip } from "../services/codeExportService.js";
 import { saveGamePackage } from "../services/databaseService.js";
 import { createGamePackage } from "../services/gameFactoryService.js";
 import { createRefinementBundle } from "../services/refinementService.js";
@@ -18,6 +19,10 @@ const refineSchema = z.object({
   refinementLevel: z.string().optional()
 });
 
+const exportCodeSchema = z.object({
+  gamePackage: z.record(z.any())
+});
+
 export async function createGame(request, response, next) {
   try {
     const input = createSchema.parse(request.body);
@@ -34,6 +39,19 @@ export function refineGame(request, response, next) {
     const input = refineSchema.parse(request.body);
     const refinement = createRefinementBundle(input);
     response.status(202).json({ refinement });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function exportGameCode(request, response, next) {
+  try {
+    const input = exportCodeSchema.parse(request.body);
+    const { buffer, filename } = await buildGameCodeZip(input.gamePackage);
+
+    response.setHeader("Content-Type", "application/zip");
+    response.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    response.send(buffer);
   } catch (error) {
     next(error);
   }
