@@ -38,16 +38,22 @@ app.get("/", (_request, response) => {
   });
 });
 
-app.get("/api/health", (_request, response) => {
-  response.json({
-    ok: true,
-    service: "kult-creator-studio-api",
-    strategy: "template-first-ai-optional",
-    database: getDatabaseConfig()
+const setupRoutes = (prefix) => {
+  app.get(`${prefix}/health`, (_request, response) => {
+    response.json({
+      ok: true,
+      service: "kult-creator-studio-api",
+      strategy: "template-first-ai-optional",
+      database: getDatabaseConfig()
+    });
   });
-});
 
-app.use("/api/templates", templateRouter);
-app.use("/api/games", gameRouter);
-app.use("/api/dashboard", dashboardRouter);
+  app.use(`${prefix}/templates`, templateRouter);
+  app.use(`${prefix}/games`, gameRouter);
+  app.use(`${prefix}/dashboard`, dashboardRouter);
+};
+
+setupRoutes("/api");
+setupRoutes("");
+
 app.use(errorHandler);
