@@ -271,6 +271,351 @@ export const templates = [
       hard: { games: 5, seconds: 16, lives: 3 },
       insane: { games: 6, seconds: 12, lives: 2 }
     }
+  },
+  {
+    id: "realistic-driving",
+    name: "3D City Driving",
+    category: "Simulation",
+    estimatedSeconds: 45,
+    reliability: 1,
+    mechanic: "Navigate a realistic 3D city with physics-based vehicle handling.",
+    controls: "WASD, Space for handbrake, C for camera",
+    assets: "High-poly car model, detailed city environment, PBR materials, dynamic lighting",
+    specs: {
+      states: ["BOOT", "DRIVE", "CRASH"],
+      collision: ["car vs buildings", "car vs traffic"],
+      scoring: "distance driven without collisions"
+    },
+    difficulty: {
+      easy: { trafficDensity: 0.2, handling: 1.5 },
+      normal: { trafficDensity: 0.5, handling: 1.0 },
+      hard: { trafficDensity: 0.8, handling: 0.7 },
+      insane: { trafficDensity: 1.2, handling: 0.5 }
+    }
+  },
+  {
+    id: "fps-survival",
+    name: "FPS Zombie Survival",
+    category: "Action",
+    estimatedSeconds: 50,
+    reliability: 1,
+    mechanic: "Survive endless waves of zombies in a photorealistic environment.",
+    controls: "WASD to move, Mouse to aim/shoot, R to reload",
+    assets: "3D weapon models, zombie character rigs, post-processing effects, spatial audio",
+    specs: {
+      states: ["BOOT", "WAVE", "RELOAD", "GAMEOVER"],
+      collision: ["bullet vs zombie", "player vs environment"],
+      scoring: "headshots and waves survived"
+    },
+    difficulty: {
+      easy: { zombieSpeed: 2, ammo: 120, health: 100 },
+      normal: { zombieSpeed: 4, ammo: 90, health: 80 },
+      hard: { zombieSpeed: 6, ammo: 60, health: 60 },
+      insane: { zombieSpeed: 8, ammo: 30, health: 40 }
+    }
+  },
+  {
+    id: "flight-sim",
+    name: "Realistic Flight Simulator",
+    category: "Simulation",
+    estimatedSeconds: 60,
+    reliability: 1,
+    mechanic: "Take off, fly, and land a commercial jet with realistic aerodynamics.",
+    controls: "Mouse Yoke, W/S for throttle, Q/E for rudder",
+    assets: "Detailed aircraft cockpit, volumetric clouds, terrain heightmaps, atmospheric scattering",
+    specs: {
+      states: ["BOOT", "TAKEOFF", "FLIGHT", "LANDING", "CRASH"],
+      collision: ["plane vs terrain"],
+      scoring: "smoothness of landing and flight path accuracy"
+    },
+    difficulty: {
+    }
+  },
+  {
+    id: "unity-karting",
+    name: "Unity Kart Racer",
+    category: "Racing",
+    estimatedSeconds: 45,
+    reliability: 1,
+    mechanic: "Complete 3 laps in a physics-based 3D kart racing game.",
+    controls: "WASD / Arrow Keys, Space drift",
+    assets: "3D Kart model, racetrack terrain, checkpoints, booster pads",
+    engine: "unity",
+    specs: {
+      states: ["MENU", "COUNTDOWN", "RACING", "FINISH"],
+      collision: ["kart vs walls", "kart vs checkpoints", "kart vs obstacles"],
+      scoring: "fastest lap and overall race time"
+    },
+    difficulty: {
+      easy: { speedMultiplier: 0.8, gravity: 9.81 },
+      normal: { speedMultiplier: 1.0, gravity: 9.81 },
+      hard: { speedMultiplier: 1.2, gravity: 12.0 },
+      insane: { speedMultiplier: 1.5, gravity: 15.0 }
+    }
+  },
+  {
+    id: "unity-fps",
+    name: "Unity FPS Arena",
+    category: "Action",
+    estimatedSeconds: 50,
+    reliability: 1,
+    mechanic: "Fight waves of robot drones inside a sci-fi arena.",
+    controls: "WASD, Mouse to aim/shoot, Space to jump",
+    assets: "3D character controller, robot drones, sci-fi weapons, laser beams",
+    engine: "unity",
+    specs: {
+      states: ["BOOT", "MENU", "WAVE", "GAMEOVER"],
+      collision: ["bullets vs drones", "player vs drones"],
+      scoring: "eliminations, survival score, headshot multipliers"
+    },
+    difficulty: {
+      easy: { dronesCount: 3, droneHealth: 50 },
+      normal: { dronesCount: 5, droneHealth: 100 },
+      hard: { dronesCount: 8, droneHealth: 150 },
+      insane: { dronesCount: 12, droneHealth: 200 }
+    }
+  },
+  {
+    id: "unity-platformer",
+    name: "Unity 3D Platformer",
+    category: "Adventure",
+    estimatedSeconds: 40,
+    reliability: 1,
+    mechanic: "Navigate challenging floating platforms and collect gold keys.",
+    controls: "WASD / Arrow Keys, Space to double-jump",
+    assets: "Character rig, floating island templates, spikes, moving platforms",
+    engine: "unity",
+    specs: {
+      states: ["BOOT", "PLAY", "FALLOUT", "COMPLETE"],
+      collision: ["player vs keys", "player vs spikes", "player vs deathzone"],
+      scoring: "keys collected and time remaining"
+    },
+    difficulty: {
+      easy: { checkPoints: 5, timeLimit: 120 },
+      normal: { checkPoints: 3, timeLimit: 90 },
+      hard: { checkPoints: 1, timeLimit: 60 },
+      insane: { checkPoints: 0, timeLimit: 45 }
+    }
+  },
+  {
+    id: "unity-zombiesmasher",
+    name: "Zombie Smasher",
+    category: "Action",
+    estimatedSeconds: 55,
+    reliability: 1,
+    mechanic: "Control a powerful tank to crush endless waves of zombies and destroy obstacles.",
+    controls: "WASD to move, Mouse Click to shoot",
+    assets: "3D Tank model, environment obstacle prefabs, detailed zombie assets",
+    engine: "unity",
+    specs: {
+      states: ["BOOT", "MENU", "SMASHING", "GAMEOVER"],
+      collision: ["tank vs zombies", "bullets vs obstacles", "tank vs obstacles"],
+      scoring: "zombies smashed, duration, obstacles destroyed"
+    },
+    difficulty: {
+      easy: { speed: 5, health: 100 },
+      normal: { speed: 8, health: 150 },
+      hard: { speed: 12, health: 200 },
+      insane: { speed: 18, health: 300 }
+    }
+  },
+  {
+    id: "unity-spaceinvaders",
+    name: "Space Invaders",
+    category: "Action",
+    estimatedSeconds: 30,
+    reliability: 1,
+    mechanic: "Destroy descending waves of alien invaders and dodge their plasma projectiles.",
+    controls: "A / D or Arrow Keys to move ship, Space to shoot",
+    assets: "Classic spaceship, dynamic alien invaders, barriers, particle explosions",
+    engine: "unity",
+    specs: {
+      states: ["BOOT", "MENU", "PLAYING", "GAMEOVER"],
+      collision: ["player bullet vs alien", "alien bullet vs player", "alien vs barriers"],
+      scoring: "aliens destroyed, wave bonus"
+    },
+    difficulty: {
+      easy: { speed: 1.5, shootRate: 0.2 },
+      normal: { speed: 3, shootRate: 0.5 },
+      hard: { speed: 5, shootRate: 0.8 },
+      insane: { speed: 7.5, shootRate: 1.2 }
+    }
+  },
+  {
+    id: "unity-pong",
+    name: "Pong",
+    category: "Sports",
+    estimatedSeconds: 15,
+    reliability: 1,
+    mechanic: "Classic table tennis simulation. Bounce the ball past the opponent's paddle.",
+    controls: "W / S or Arrow Keys to move paddle",
+    assets: "Paddles, ball, arena boundary, score labels",
+    engine: "unity",
+    specs: {
+      states: ["MENU", "PLAY", "GAMEOVER"],
+      collision: ["ball vs paddle", "ball vs wall"],
+      scoring: "player score vs ai score"
+    },
+    difficulty: {
+      easy: { speed: 5 },
+      normal: { speed: 8 },
+      hard: { speed: 12 },
+      insane: { speed: 18 }
+    }
+  },
+  {
+    id: "unity-tetris",
+    name: "Tetris",
+    category: "Puzzle",
+    estimatedSeconds: 20,
+    reliability: 1,
+    mechanic: "Rotate and fit falling tetromino shapes to clear horizontal lines.",
+    controls: "Arrow Keys / WASD, Space to drop",
+    assets: "Tetromino blocks, grid frame, preview window, score text",
+    engine: "unity",
+    specs: {
+      states: ["MENU", "PLAY", "GAMEOVER"],
+      collision: ["block vs grid", "block vs block"],
+      scoring: "lines cleared, combo multipliers"
+    },
+    difficulty: {
+      easy: { speed: 1 },
+      normal: { speed: 2 },
+      hard: { speed: 3 },
+      insane: { speed: 5 }
+    }
+  },
+  {
+    id: "unity-snake",
+    name: "Retro Snake",
+    category: "Retro",
+    estimatedSeconds: 15,
+    reliability: 1,
+    mechanic: "Guide the growing snake to eat food while avoiding walls and your own tail.",
+    controls: "Arrow Keys / WASD to steer",
+    assets: "Snake head & segments, food items, boundary grid, score display",
+    engine: "unity",
+    specs: {
+      states: ["MENU", "PLAYING", "GAMEOVER"],
+      collision: ["snake vs wall", "snake vs body", "snake vs food"],
+      scoring: "food consumed"
+    },
+    difficulty: {
+      easy: { speed: 5 },
+      normal: { speed: 8 },
+      hard: { speed: 12 },
+      insane: { speed: 16 }
+    }
+  },
+  {
+    id: "unity-pacman",
+    name: "Pac-Man",
+    category: "Arcade",
+    estimatedSeconds: 25,
+    reliability: 1,
+    mechanic: "Navigate the maze to consume all dots while dodging wandering ghosts.",
+    controls: "Arrow Keys / WASD to move",
+    assets: "Pac-Man model, ghosts, maze walls, score dots, power pellets",
+    engine: "unity",
+    specs: {
+      states: ["MENU", "PLAYING", "GAMEOVER", "VICTORY"],
+      collision: ["pacman vs ghost", "pacman vs dot", "pacman vs powerpellet"],
+      scoring: "dots consumed, ghosts eaten"
+    },
+    difficulty: {
+      easy: { speed: 4, ghosts: 2 },
+      normal: { speed: 6, ghosts: 4 },
+      hard: { speed: 8, ghosts: 4 },
+      insane: { speed: 10, ghosts: 4 }
+    }
+  },
+  {
+    id: "unity-towerdefense",
+    name: "Tower Defense",
+    category: "Strategy",
+    estimatedSeconds: 45,
+    reliability: 1,
+    mechanic: "Place defensive towers along a path to destroy waves of incoming enemies.",
+    controls: "Mouse Click to place towers",
+    assets: "Turret towers, creeps/enemies, pathways, health bars, base core",
+    engine: "unity",
+    specs: {
+      states: ["MENU", "PLAYING", "GAMEOVER", "VICTORY"],
+      collision: ["projectile vs enemy", "enemy vs base"],
+      scoring: "enemies eliminated, waves survived"
+    },
+    difficulty: {
+      easy: { startingGold: 500, waveInterval: 20 },
+      normal: { startingGold: 300, waveInterval: 15 },
+      hard: { startingGold: 200, waveInterval: 12 },
+      insane: { startingGold: 100, waveInterval: 10 }
+    }
+  },
+  {
+    id: "unity-solitaire",
+    name: "Solitaire",
+    category: "Card",
+    estimatedSeconds: 40,
+    reliability: 1,
+    mechanic: "Sort cards by suit and descending order in this classic solitaire layout.",
+    controls: "Mouse Drag & Drop / Click",
+    assets: "Card deck sprites, board felt green background, suit signs, score tracking",
+    engine: "unity",
+    specs: {
+      states: ["MENU", "PLAYING", "WIN"],
+      collision: ["card snap to column"],
+      scoring: "cards sorted, moves made"
+    },
+    difficulty: {
+      easy: { drawCount: 1 },
+      normal: { drawCount: 3 },
+      hard: { drawCount: 3, timed: true },
+      insane: { drawCount: 3, timed: true, penalty: true }
+    }
+  },
+  {
+    id: "unity-flappybird",
+    name: "Flappy Bird",
+    category: "Casual",
+    estimatedSeconds: 20,
+    reliability: 1,
+    mechanic: "Tap or click to flap wings and navigate safely between pipes.",
+    controls: "Mouse Click / Space",
+    assets: "Flappy character model, scrolling columns/pipes, score trigger, sound controls",
+    engine: "unity",
+    specs: {
+      states: ["MENU", "PLAYING", "GAMEOVER"],
+      collision: ["bird vs pipe", "bird vs ground"],
+      scoring: "pipes cleared"
+    },
+    difficulty: {
+      easy: { gravity: 450, gap: 200 },
+      normal: { gravity: 600, gap: 150 },
+      hard: { gravity: 750, gap: 120 },
+      insane: { gravity: 900, gap: 100 }
+    }
+  },
+  {
+    id: "unity-runner",
+    name: "Endless Runner",
+    category: "Action",
+    estimatedSeconds: 30,
+    reliability: 1,
+    mechanic: "Run indefinitely, jump over hazards, and grab score pickups.",
+    controls: "Space to jump, Mouse Click",
+    assets: "Running avatar, procedural obstacles, coin pickups, parallax skyline background",
+    engine: "unity",
+    specs: {
+      states: ["MENU", "PLAYING", "GAMEOVER"],
+      collision: ["player vs obstacle", "player vs coin"],
+      scoring: "distance traveled, coins collected"
+    },
+    difficulty: {
+      easy: { speedMultiplier: 0.8, obstacleFrequency: 1.5 },
+      normal: { speedMultiplier: 1.0, obstacleFrequency: 1.2 },
+      hard: { speedMultiplier: 1.25, obstacleFrequency: 0.9 },
+      insane: { speedMultiplier: 1.6, obstacleFrequency: 0.7 }
+    }
   }
 ];
 
