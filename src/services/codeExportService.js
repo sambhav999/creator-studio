@@ -329,6 +329,15 @@ requestAnimationFrame(frame);
 `;
 }
 
+function runtimeSourceFor(gamePackage) {
+  const generatedCode = gamePackage.refinement?.generatedCode;
+  if (typeof generatedCode === "string" && generatedCode.trim()) {
+    return generatedCode.trim() + "\n";
+  }
+
+  return runtimeSource();
+}
+
 function stylesSource() {
   return `:root {
   color-scheme: dark;
@@ -370,7 +379,7 @@ export async function buildGameCodeZip(gamePackage) {
   root.file("index.html", indexHtmlFor(title));
   root.file("README.md", readmeFor(gamePackage));
   root.file("src/gamePackage.js", `export const gamePackage = ${JSON.stringify(gamePackage, null, 2)};\n`);
-  root.file("src/main.js", runtimeSource());
+  root.file("src/main.js", runtimeSourceFor(gamePackage));
   root.file("src/styles.css", stylesSource());
 
   const buffer = await zip.generateAsync({ type: "nodebuffer" });

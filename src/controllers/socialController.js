@@ -1,0 +1,187 @@
+import { z } from "zod";
+import {
+  toggleLike,
+  getLikeStatus,
+  addComment,
+  getComments,
+  deleteComment,
+  toggleFavorite,
+  getFavoriteStatus,
+  getUserFavorites,
+  recordShare,
+  getShareCount,
+  getSocialStats,
+} from "../services/socialService.js";
+
+// ─── Schemas ───────────────────────────────────────────────────────────────
+
+const gameIdSchema = z.object({
+  gameId: z.string().min(1),
+});
+
+const userIdSchema = z.object({
+  userId: z.string().min(1),
+});
+
+const likeSchema = gameIdSchema.merge(userIdSchema);
+
+const commentCreateSchema = gameIdSchema.merge(userIdSchema).extend({
+  username: z.string().min(1).max(50),
+  text: z.string().min(1).max(2000),
+});
+
+const commentDeleteSchema = z.object({
+  commentId: z.string().min(1),
+  userId: z.string().min(1),
+});
+
+const favoriteSchema = gameIdSchema.merge(userIdSchema);
+
+const shareSchema = gameIdSchema.merge(userIdSchema).extend({
+  platform: z.enum(["link", "twitter", "discord", "telegram", "whatsapp", "embed", "instagram", "email"]).optional(),
+});
+
+const paginationSchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  LIKES
+// ═══════════════════════════════════════════════════════════════════════════
+
+export async function handleToggleLike(req, res, next) {
+  try {
+    const { gameId, userId } = likeSchema.parse(req.body);
+    const result = await toggleLike(gameId, userId);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function handleGetLikeStatus(req, res, next) {
+  try {
+    const { gameId } = gameIdSchema.parse(req.params);
+    const userId = req.query.userId ?? null;
+    const result = await getLikeStatus(gameId, userId);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  COMMENTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+export async function handleAddComment(req, res, next) {
+  try {
+    const { gameId, userId, username, text } = commentCreateSchema.parse(req.body);
+    const result = await addComment(gameId, userId, username, text);
+    res.status(201).json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function handleGetComments(req, res, next) {
+  try {
+    const { gameId } = gameIdSchema.parse(req.params);
+    const { page, limit } = paginationSchema.parse(req.query);
+    const result = await getComments(gameId, page, limit);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function handleDeleteComment(req, res, next) {
+  try {
+    const { commentId } = z.object({ commentId: z.string().min(1) }).parse(req.params);
+    const { userId } = userIdSchema.parse(req.body);
+    const result = await deleteComment(commentId, userId);
+    if (!result.deleted) {
+      res.status(404).json({ error: "Comment not found or not owned by user" });
+      return;
+    }
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  FAVORITES
+// ═══════════════════════════════════════════════════════════════════════════
+
+export async function handleToggleFavorite(req, res, next) {
+  try {
+    const { gameId, userId } = favoriteSchema.parse(req.body);
+    const result = await toggleFavorite(gameId, userId);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function handleGetFavoriteStatus(req, res, next) {
+  try {
+    const { gameId } = gameIdSchema.parse(req.params);
+    const userId = req.query.userId ?? null;
+    const result = await getFavoriteStatus(gameId, userId);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function handleGetUserFavorites(req, res, next) {
+  try {
+    const { userId } = userIdSchema.parse(req.params);
+    const { page, limit } = paginationSchema.parse(req.query);
+    const result = await getUserFavorites(userId, page, limit);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  SHARES
+// ═══════════════════════════════════════════════════════════════════════════
+
+export async function handleRecordShare(req, res, next) {
+  try {
+    const { gameId, userId, platform } = shareSchema.parse(req.body);
+    const result = await recordShare(gameId, userId, platform);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function handleGetShareCount(req, res, next) {
+  try {
+    const { gameId } = gameIdSchema.parse(req.params);
+    const result = await getShareCount(gameId);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  AGGREGATE
+// ═══════════════════════════════════════════════════════════════════════════
+
+export async function handleGetSocialStats(req, res, next) {
+  try {
+    const { gameId } = gameIdSchema.parse(req.params);
+    const userId = req.query.userId ?? null;
+    const result = await getSocialStats(gameId, userId);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+}

@@ -3,11 +3,14 @@ import dotenv from "dotenv";
 import express from "express";
 import helmet from "helmet";
 import morgan from "morgan";
+import { agentRouter } from "./routes/agentRoutes.js";
 import { dashboardRouter } from "./routes/dashboardRoutes.js";
 import { gameRouter } from "./routes/gameRoutes.js";
+import { socialRouter } from "./routes/socialRoutes.js";
 import { templateRouter } from "./routes/templateRoutes.js";
 import { getDatabaseConfig } from "./services/databaseService.js";
 import { errorHandler } from "./middleware/errorHandler.js";
+import { getZeroGConfig } from "./services/zeroGService.js";
 
 dotenv.config();
 
@@ -18,7 +21,7 @@ app.use(cors({
   origin: process.env.CORS_ORIGIN?.split(",").map(origin => origin.trim()) ?? true,
   exposedHeaders: ["Content-Disposition"]
 }));
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({ limit: "20mb" }));
 app.use(morgan("dev"));
 
 app.get("/", (_request, response) => {
@@ -30,11 +33,15 @@ app.get("/", (_request, response) => {
       health: "/api/health",
       templates: "/api/templates",
       createGame: "/api/games/create",
+      generateFromPrompt: "/api/games/generate-from-prompt",
       refineGame: "/api/games/refine",
       exportCode: "/api/games/export-code",
-      dashboard: "/api/dashboard"
+      agents: "/api/agents/stack",
+      dashboard: "/api/dashboard",
+      social: "/api/social"
     },
-    database: getDatabaseConfig()
+    database: getDatabaseConfig(),
+    agents: getZeroGConfig()
   });
 });
 
@@ -44,13 +51,16 @@ const setupRoutes = (prefix) => {
       ok: true,
       service: "kult-creator-studio-api",
       strategy: "template-first-ai-optional",
-      database: getDatabaseConfig()
+      database: getDatabaseConfig(),
+      agents: getZeroGConfig()
     });
   });
 
   app.use(`${prefix}/templates`, templateRouter);
   app.use(`${prefix}/games`, gameRouter);
+  app.use(`${prefix}/agents`, agentRouter);
   app.use(`${prefix}/dashboard`, dashboardRouter);
+  app.use(`${prefix}/social`, socialRouter);
 };
 
 setupRoutes("/api");

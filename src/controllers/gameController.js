@@ -2,6 +2,7 @@ import { z } from "zod";
 import { buildGameCodeZip } from "../services/codeExportService.js";
 import { saveGamePackage } from "../services/databaseService.js";
 import { createGamePackage } from "../services/gameFactoryService.js";
+import { generateGameFromPrompt } from "../services/promptPipelineService.js";
 import { createRefinementBundle } from "../services/refinementService.js";
 
 const createSchema = z.object({
@@ -11,6 +12,19 @@ const createSchema = z.object({
   difficulty: z.enum(["easy", "normal", "hard", "insane"]).optional(),
   customization: z.enum(["light", "medium", "heavy"]).optional(),
   extra: z.enum(["none", "powerups", "leaderboard", "boss"]).optional()
+});
+
+const promptGenerateSchema = z.object({
+  prompt: z.string().min(1),
+  context: z.record(z.any()).optional(),
+  theme: z.string().optional(),
+  difficulty: z.enum(["easy", "normal", "hard", "insane"]).optional(),
+  customization: z.enum(["light", "medium", "heavy"]).optional(),
+  extra: z.enum(["none", "powerups", "leaderboard", "boss"]).optional(),
+  includePlan: z.boolean().optional(),
+  includeCode: z.boolean().optional(),
+  includeAssets: z.boolean().optional(),
+  strategy: z.string().optional()
 });
 
 const refineSchema = z.object({
@@ -34,10 +48,21 @@ export async function createGame(request, response, next) {
   }
 }
 
-export function refineGame(request, response, next) {
+export async function generateGame(request, response, next) {
+  try {
+    const input = promptGenerateSchema.parse(request.body);
+    const result = await generateGameFromPrompt(input);
+    const persistence = await saveGamePackage(result.game);
+    response.status(201).json({ ...result, persistence });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function refineGame(request, response, next) {
   try {
     const input = refineSchema.parse(request.body);
-    const refinement = createRefinementBundle(input);
+    const refinement = await createRefinementBundle(input);
     response.status(202).json({ refinement });
   } catch (error) {
     next(error);
