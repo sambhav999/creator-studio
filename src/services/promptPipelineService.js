@@ -2,6 +2,7 @@ import { templates, themePresets } from "../data/templates.js";
 import { createGamePackage } from "./gameFactoryService.js";
 import { createRefinementBundle } from "./refinementService.js";
 import { createOrchestrationPlan, generateImageAsset, runBackgroundTask } from "./zeroGService.js";
+import { nanoid } from "nanoid";
 
 const defaultOptions = {
   theme: "neon",
@@ -91,6 +92,7 @@ function normalizeSelection(selection, prompt) {
 }
 
 async function chooseTemplateWithAgent(prompt, context) {
+  const localRecommendation = localTemplateSelection(prompt);
   const templateSummaries = templates.map(template => ({
     id: template.id,
     name: template.name,
@@ -106,6 +108,9 @@ async function chooseTemplateWithAgent(prompt, context) {
     input: {
       prompt,
       context: context ?? null,
+      localRecommendation,
+      selectionRule:
+        "Choose the template whose core player actions and game loop are closest to the request. Prefer mechanic fit over theme or title words.",
       allowedThemes: Object.keys(themePresets),
       allowedDifficulties: ["easy", "normal", "hard", "insane"],
       allowedCustomization: ["light", "medium", "heavy"],
@@ -118,6 +123,115 @@ async function chooseTemplateWithAgent(prompt, context) {
     agent: result,
     selection: normalizeSelection(extractJsonObject(result.content), prompt)
   };
+}
+
+async function createHybridVariation({ prompt, context, selection, template, generationId }) {
+  const result = await runBackgroundTask({
+    task: [
+      "Create a distinct variation blueprint for a browser game built from the selected closest template.",
+      "Preserve the reliable core loop, but change multiple meaningful details so repeat generations are not identical.",
+      "Return ONLY JSON with title, mechanicTwist, behaviorChanges (array), tuningOverrides (object of numeric/boolean values),",
+      "visualMood, colors (3-5 hex colors), assetDirection, scoringVariation, thumbnailConcept, uniquenessSummary.",
+    ].join(" "),
+    input: {
+      prompt,
+      generationId,
+      selectedTemplate: {
+        id: template.id,
+        name: template.name,
+        category: template.category,
+        mechanic: template.mechanic,
+        controls: template.controls,
+        tuning: template.difficulty?.[selection.difficulty] ?? template.difficulty?.normal,
+        assets: template.assets,
+      },
+      recentCreations: context?.recentCreations ?? [],
+      instruction:
+        "Avoid titles, color palettes, tuning combinations, obstacle patterns, scoring rules, and thumbnail compositions used by recentCreations.",
+    },
+  });
+
+  const parsed = extractJsonObject(result.content) ?? {};
+  return {
+    agent: result,
+    variation: {
+      title: parsed.title || `${template.name} ${generationId.slice(-4).toUpperCase()}`,
+      mechanicTwist:
+        parsed.mechanicTwist || `A distinct ${prompt} variation of ${template.mechanic}`,
+      behaviorChanges: Array.isArray(parsed.behaviorChanges)
+        ? parsed.behaviorChanges.slice(0, 8)
+        : ["Altered pacing", "Remixed obstacle timing", "Distinct scoring cadence"],
+      tuningOverrides:
+        parsed.tuningOverrides && typeof parsed.tuningOverrides === "object"
+          ? parsed.tuningOverrides
+          : {},
+      visualMood: parsed.visualMood || "distinctive high-energy game world",
+      colors:
+        Array.isArray(parsed.colors) && parsed.colors.length >= 3
+          ? parsed.colors.slice(0, 5)
+          : null,
+      assetDirection: parsed.assetDirection || template.assets,
+      scoringVariation: parsed.scoringVariation || "Reward skill streaks and clean play",
+      thumbnailConcept:
+        parsed.thumbnailConcept ||
+        `A unique action moment from ${template.name}, generation ${generationId}`,
+      uniquenessSummary:
+        parsed.uniquenessSummary || "Unique tuning, art direction, and scoring variation",
+    },
+  };
+}
+
+function applyHybridVariation(game, variation, generationId) {
+  const safeOverrides = Object.fromEntries(
+    Object.entries(variation.tuningOverrides ?? {}).filter(
+      ([, value]) => typeof value === "number" || typeof value === "boolean",
+    ),
+  );
+
+  game.title = variation.title;
+  game.gameplay.mechanic = variation.mechanicTwist;
+  game.gameplay.tuning = {
+    ...game.gameplay.tuning,
+    ...safeOverrides,
+  };
+  game.gameplay.scoring = variation.scoringVariation;
+  game.gameplay.behaviorChanges = variation.behaviorChanges;
+  game.visuals.mood = variation.visualMood;
+  if (variation.colors) game.visuals.colors = variation.colors;
+  game.visuals.assets = variation.assetDirection;
+  game.generationFingerprint = generationId;
+  game.checklist = [
+    ...game.checklist,
+    "Closest template selected",
+    "Agent behavior variation applied",
+    "Unique generation fingerprint assigned",
+  ];
+}
+
+function createFallbackThumbnail(game, generationId) {
+  const colors = game.visuals?.colors?.length
+    ? game.visuals.colors.slice(0, 3)
+    : ["#f03ee8", "#35e8ff", "#101327"];
+  const title = String(game.title || "Generated Game")
+    .replace(/[<>&'"]/g, "")
+    .slice(0, 36);
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+      <defs>
+        <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="${colors[0]}"/>
+          <stop offset=".52" stop-color="${colors[1] || colors[0]}"/>
+          <stop offset="1" stop-color="${colors[2] || "#090b18"}"/>
+        </linearGradient>
+      </defs>
+      <rect width="1024" height="1024" fill="#070914"/>
+      <rect x="42" y="42" width="940" height="940" rx="64" fill="url(#bg)" opacity=".9"/>
+      <circle cx="${220 + (generationId.charCodeAt(0) % 180)}" cy="350" r="180" fill="#fff" opacity=".16"/>
+      <path d="M130 760 L420 310 L610 610 L760 390 L920 760 Z" fill="#080a18" opacity=".72"/>
+      <rect x="100" y="790" width="824" height="118" rx="28" fill="#080a18" opacity=".88"/>
+      <text x="512" y="860" text-anchor="middle" fill="#fff" font-family="Arial,sans-serif" font-size="54" font-weight="700">${title}</text>
+    </svg>`;
+  return `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`;
 }
 
 async function generateSpecsWithAgent(prompt, context) {
@@ -158,6 +272,7 @@ export async function generateGameFromPrompt({
   strategy = "hybrid"
 }) {
   const warnings = [];
+  const generationId = nanoid(16);
   let routing = null;
   let selection = null;
   let game = null;
@@ -237,13 +352,31 @@ export async function generateGameFromPrompt({
   }
 
   if (strategy !== "pure-agent") {
-    selection = normalizeSelection({ theme, difficulty, customization, extra }, prompt);
+    selection = normalizeSelection(
+      {
+        templateId: context?.preferredTemplateId,
+        theme,
+        difficulty,
+        customization,
+        extra,
+      },
+      prompt,
+    );
     try {
       routing = await chooseTemplateWithAgent(prompt, context);
       selection = routing.selection;
     } catch (error) {
       warnings.push(`Background routing fallback: ${error.message}`);
-      selection = normalizeSelection({ theme, difficulty, customization, extra }, prompt);
+      selection = normalizeSelection(
+        {
+          templateId: context?.preferredTemplateId,
+          theme,
+          difficulty,
+          customization,
+          extra,
+        },
+        prompt,
+      );
     }
 
     game = createGamePackage({
@@ -254,14 +387,50 @@ export async function generateGameFromPrompt({
       customization: selection.customization,
       extra: selection.extra
     });
+
+    const selectedTemplate = templates.find(template => template.id === selection.templateId);
+    if (selectedTemplate) {
+      try {
+        const variationResult = await createHybridVariation({
+          prompt,
+          context,
+          selection,
+          template: selectedTemplate,
+          generationId,
+        });
+        applyHybridVariation(game, variationResult.variation, generationId);
+        game.generation = {
+          variation: variationResult.variation,
+          variationModel: variationResult.agent.model,
+        };
+      } catch (error) {
+        warnings.push(`Variation agent fallback: ${error.message}`);
+        applyHybridVariation(
+          game,
+          {
+            title: `${game.title} ${generationId.slice(-4).toUpperCase()}`,
+            mechanicTwist: game.gameplay.mechanic,
+            behaviorChanges: ["Seeded pacing variation"],
+            tuningOverrides: {},
+            visualMood: game.visuals.mood,
+            colors: game.visuals.colors,
+            assetDirection: game.visuals.assets,
+            scoringVariation: game.gameplay.scoring,
+          },
+          generationId,
+        );
+      }
+    }
   }
 
   game.tier = includeCode ? "prompt-agent" : "prompt-template";
   game.generation = {
+    ...(game.generation ?? {}),
     mode: "prompt-to-game",
     prompt,
     selection,
-    routingModel: routing?.agent?.model ?? null
+    routingModel: routing?.agent?.model ?? null,
+    generationId,
   };
 
   let plan = null;
@@ -296,7 +465,9 @@ export async function generateGameFromPrompt({
           `${game.title} game thumbnail`,
           game.gameplay?.mechanic,
           game.visuals?.mood,
-          "polished colorful game cover art, no text"
+          game.generation?.variation?.thumbnailConcept,
+          `unique generation fingerprint ${generationId}`,
+          "polished colorful game cover art, clear gameplay subject, no text, do not reuse a previous composition"
         ].filter(Boolean).join(", ")
       })
     : null;
@@ -325,7 +496,12 @@ export async function generateGameFromPrompt({
         || (thumbnail?.b64_json ? `data:image/png;base64,${thumbnail.b64_json}` : null);
     } else {
       warnings.push(`Image agent skipped: ${assetsResult.reason.message}`);
+      game.thumbnailUrl = createFallbackThumbnail(game, generationId);
     }
+  }
+
+  if (!game.thumbnailUrl) {
+    game.thumbnailUrl = createFallbackThumbnail(game, generationId);
   }
 
   return {

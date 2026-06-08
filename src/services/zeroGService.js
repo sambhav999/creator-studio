@@ -1,6 +1,9 @@
 const DEFAULT_0G_BASE_URL = "https://router-api.0g.ai/v1";
 
 export const zeroGModels = {
+  get general() {
+    return process.env.LLM_MODEL || "0GM-1.0-35B-A3B";
+  },
   get orchestrator() {
     return process.env.ZERO_G_ORCHESTRATOR_MODEL || "glm-5.1";
   },
@@ -23,7 +26,7 @@ export const zeroGModels = {
 
 export function getZeroGConfig() {
   return {
-    provider: "0g",
+    provider: process.env.LLM_PROVIDER || "0g",
     baseUrl: process.env["0G_BASE_URL"] || DEFAULT_0G_BASE_URL,
     hasApiKey: Boolean(process.env["0G_API_KEY"]),
     models: zeroGModels
@@ -178,7 +181,7 @@ export async function createOrchestrationPlan({ prompt, context }) {
 
 export async function runBackgroundTask({ task, input }) {
   return callZeroGChat({
-    model: zeroGModels.background,
+    model: zeroGModels.background || zeroGModels.general,
     temperature: 0.2,
     maxTokens: 1200,
     messages: [

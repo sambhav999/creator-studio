@@ -1,0 +1,38 @@
+import { z } from "zod";
+import { getLeaderboard, submitScore } from "../services/leaderboardService.js";
+
+const gameParamsSchema = z.object({
+  gameId: z.string().min(1),
+});
+
+const leaderboardQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+});
+
+const scoreSchema = z.object({
+  userId: z.string().min(1),
+  username: z.string().min(1).max(50),
+  score: z.coerce.number().finite().nonnegative(),
+});
+
+export async function handleGetLeaderboard(request, response, next) {
+  try {
+    const { gameId } = gameParamsSchema.parse(request.params);
+    const { limit } = leaderboardQuerySchema.parse(request.query);
+    const leaderboard = await getLeaderboard(gameId, limit);
+    response.json(leaderboard);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function handleSubmitScore(request, response, next) {
+  try {
+    const { gameId } = gameParamsSchema.parse(request.params);
+    const input = scoreSchema.parse(request.body);
+    const leaderboard = await submitScore({ gameId, ...input });
+    response.status(201).json(leaderboard);
+  } catch (error) {
+    next(error);
+  }
+}

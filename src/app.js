@@ -6,6 +6,7 @@ import morgan from "morgan";
 import { agentRouter } from "./routes/agentRoutes.js";
 import { dashboardRouter } from "./routes/dashboardRoutes.js";
 import { gameRouter } from "./routes/gameRoutes.js";
+import { leaderboardRouter } from "./routes/leaderboardRoutes.js";
 import { socialRouter } from "./routes/socialRoutes.js";
 import { templateRouter } from "./routes/templateRoutes.js";
 import { getDatabaseConfig } from "./services/databaseService.js";
@@ -38,6 +39,7 @@ app.get("/", (_request, response) => {
       exportCode: "/api/games/export-code",
       agents: "/api/agents/stack",
       dashboard: "/api/dashboard",
+      leaderboards: "/api/leaderboards/:gameId",
       social: "/api/social"
     },
     database: getDatabaseConfig(),
@@ -58,6 +60,7 @@ const setupRoutes = (prefix) => {
 
   app.use(`${prefix}/templates`, templateRouter);
   app.use(`${prefix}/games`, gameRouter);
+  app.use(`${prefix}/leaderboards`, leaderboardRouter);
   app.use(`${prefix}/agents`, agentRouter);
   app.use(`${prefix}/dashboard`, dashboardRouter);
   app.use(`${prefix}/social`, socialRouter);
