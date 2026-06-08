@@ -154,7 +154,7 @@ export async function generateGameFromPrompt({
   extra,
   includePlan = true,
   includeCode = true,
-  includeAssets = false,
+  includeAssets = true,
   strategy = "hybrid"
 }) {
   const warnings = [];
@@ -229,6 +229,7 @@ export async function generateGameFromPrompt({
           reason: "Pure Agent design from prompt."
         }
       };
+      selection = routing.selection;
     } catch (error) {
       warnings.push(`Pure agent generation failed, falling back to hybrid: ${error.message}`);
       strategy = "hybrid";
@@ -281,34 +282,49 @@ export async function generateGameFromPrompt({
   }
 
   let refinement = null;
-  if (includeCode) {
-    try {
-      refinement = await createRefinementBundle({
+  let assets = null;
+  const codePromise = includeCode
+    ? createRefinementBundle({
         gamePackage: game,
         request: prompt,
         refinementLevel: selection.customization
-      });
-      game.refinement = refinement;
-      game.generation.codeModel = refinement.model;
-    } catch (error) {
-      warnings.push(`Code agent skipped: ${error.message}`);
-    }
-  }
-
-  let assets = null;
-  if (includeAssets) {
-    try {
-      assets = await generateImageAsset({
+      })
+    : null;
+  const assetsPromise = includeAssets
+    ? generateImageAsset({
         prompt: [
           `${game.title} game thumbnail`,
           game.gameplay?.mechanic,
           game.visuals?.mood,
           "polished colorful game cover art, no text"
         ].filter(Boolean).join(", ")
-      });
+      })
+    : null;
+
+  const [codeResult, assetsResult] = await Promise.allSettled([
+    codePromise,
+    assetsPromise
+  ]);
+
+  if (includeCode) {
+    if (codeResult.status === "fulfilled") {
+      refinement = codeResult.value;
+      game.refinement = refinement;
+      game.generation.codeModel = refinement.model;
+    } else {
+      warnings.push(`Code agent skipped: ${codeResult.reason.message}`);
+    }
+  }
+
+  if (includeAssets) {
+    if (assetsResult.status === "fulfilled") {
+      assets = assetsResult.value;
       game.generation.imageModel = assets.model;
-    } catch (error) {
-      warnings.push(`Image agent skipped: ${error.message}`);
+      const thumbnail = assets.images?.[0];
+      game.thumbnailUrl = thumbnail?.url
+        || (thumbnail?.b64_json ? `data:image/png;base64,${thumbnail.b64_json}` : null);
+    } else {
+      warnings.push(`Image agent skipped: ${assetsResult.reason.message}`);
     }
   }
 

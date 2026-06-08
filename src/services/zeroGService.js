@@ -58,64 +58,98 @@ async function parseJsonResponse(response) {
   return data;
 }
 
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function isRetriableError(error) {
+  return !error.status || error.status === 408 || error.status === 429 || error.status >= 500;
+}
+
+function errorCauseDetails(error) {
+  const cause = error?.cause;
+  if (!cause) return null;
+
+  return {
+    name: cause.name,
+    message: cause.message,
+    code: cause.code,
+    errno: cause.errno,
+    syscall: cause.syscall,
+    hostname: cause.hostname
+  };
+}
+
 export async function callZeroGChat({
   model,
   messages,
   temperature = 0.3,
   maxTokens = 2000,
-  timeoutMs = 120000
+  timeoutMs = 120000,
+  retries = 2,
+  retryBaseDelayMs = 1000
 }) {
   const { apiKey, baseUrl } = getClientConfig();
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
-  try {
-    const response = await fetch(`${baseUrl}/chat/completions`, {
-      method: "POST",
-      signal: controller.signal,
-      headers: {
-        "Authorization": `Bearer ${apiKey}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const response = await fetch(`${baseUrl}/chat/completions`, {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          "Authorization": `Bearer ${apiKey}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model,
+          messages,
+          temperature,
+          max_tokens: maxTokens
+        })
+      });
+
+      const data = await parseJsonResponse(response);
+      const content = data?.choices?.[0]?.message?.content;
+
+      if (!content) {
+        const error = new Error("0G API returned no message content");
+        error.status = 502;
+        throw error;
+      }
+
+      return {
+        provider: "0g",
         model,
-        messages,
-        temperature,
-        max_tokens: maxTokens
-      })
-    });
+        content,
+        usage: data.usage ?? null
+      };
+    } catch (originalError) {
+      let error = originalError;
+      if (error.name === "AbortError") {
+        error = new Error("0G API request timed out", { cause: originalError });
+        error.status = 504;
+      } else if (error instanceof SyntaxError) {
+        error = new Error("0G API returned an unreadable response", { cause: originalError });
+        error.status = 502;
+      }
 
-    const data = await parseJsonResponse(response);
-    const content = data?.choices?.[0]?.message?.content;
+      console.error("0G chat request failed", {
+        model,
+        attempt: attempt + 1,
+        maxAttempts: retries + 1,
+        status: error.status ?? null,
+        message: error.message,
+        cause: errorCauseDetails(error)
+      });
 
-    if (!content) {
-      const error = new Error("0G API returned no message content");
-      error.status = 502;
-      throw error;
+      if (attempt >= retries || !isRetriableError(error)) throw error;
+      await sleep(retryBaseDelayMs * (2 ** attempt));
+    } finally {
+      clearTimeout(timeout);
     }
-
-    return {
-      provider: "0g",
-      model,
-      content,
-      usage: data.usage ?? null
-    };
-  } catch (error) {
-    if (error.name === "AbortError") {
-      const timeoutError = new Error("0G API request timed out");
-      timeoutError.status = 504;
-      throw timeoutError;
-    }
-
-    if (error instanceof SyntaxError) {
-      const parseError = new Error("0G API returned an unreadable response");
-      parseError.status = 502;
-      throw parseError;
-    }
-
-    throw error;
-  } finally {
-    clearTimeout(timeout);
   }
 }
 
