@@ -27,23 +27,23 @@ export const zeroGModels = {
 export function getZeroGConfig() {
   return {
     provider: process.env.LLM_PROVIDER || "0g",
-    baseUrl: process.env["0G_BASE_URL"] || DEFAULT_0G_BASE_URL,
-    hasApiKey: Boolean(process.env["0G_API_KEY"]),
+    baseUrl: process.env.ZERO_G_BASE_URL || DEFAULT_0G_BASE_URL,
+    hasApiKey: Boolean(process.env.ZERO_G_API_KEY),
     models: zeroGModels
   };
 }
 
 function getClientConfig() {
-  const apiKey = process.env["0G_API_KEY"];
+  const apiKey = process.env.ZERO_G_API_KEY;
   if (!apiKey) {
-    const error = new Error("0G_API_KEY is required for 0G agent calls");
+    const error = new Error("ZERO_G_API_KEY is required for 0G agent calls");
     error.status = 503;
     throw error;
   }
 
   return {
     apiKey,
-    baseUrl: (process.env["0G_BASE_URL"] || DEFAULT_0G_BASE_URL).replace(/\/$/, "")
+    baseUrl: (process.env.ZERO_G_BASE_URL || DEFAULT_0G_BASE_URL).replace(/\/$/, "")
   };
 }
 

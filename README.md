@@ -95,8 +95,8 @@ CORS_ORIGIN=http://localhost:5173
 
 # 0G Private Computer agents (optional — for orchestration, code, assets, vision, speech)
 OPENAI_API_KEY=
-0G_API_KEY=
-0G_BASE_URL=https://router-api.0g.ai/v1
+ZERO_G_API_KEY=
+ZERO_G_BASE_URL=https://router-api.0g.ai/v1
 LLM_PROVIDER=0g
 ZERO_G_ORCHESTRATOR_MODEL=glm-5.1
 ZERO_G_CODING_MODEL=deepseek-v4-pro
