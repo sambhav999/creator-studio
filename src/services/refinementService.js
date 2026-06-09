@@ -275,7 +275,7 @@ async function call0GAgent(promptBundle) {
   }
 }
 
-export async function createRefinementBundle({ gamePackage, request, refinementLevel }) {
+export async function createRefinementBundle({ gamePackage, request, refinementLevel, strategy }) {
   if (!gamePackage) {
     const error = new Error("gamePackage is required");
     error.status = 400;
@@ -286,7 +286,7 @@ export async function createRefinementBundle({ gamePackage, request, refinementL
   const reference = getReferenceGame(gamePackage.templateId);
 
   let generated;
-  if (reference) {
+  if (reference && strategy !== "pure-agent") {
     try {
       generated = await generateFromSeed(promptBundle, reference.code, zeroGModels.coding);
     } catch (error) {
