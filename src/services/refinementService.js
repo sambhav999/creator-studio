@@ -1,3 +1,4 @@
+import { getReferenceGame } from "../data/referenceGames.js";
 import { callZeroGChat, zeroGModels } from "./zeroGService.js";
 
 function buildPromptBundle({ gamePackage, request }) {
@@ -199,6 +200,64 @@ async function generateWithModel(promptBundle, model) {
   };
 }
 
+// Seed-and-edit: hand the agent a working reference module and ask it to modify
+// that, instead of writing from a blank page. Faster, cheaper, and far more reliable.
+// If the agent is unreachable or returns broken code, the reference ships unchanged.
+async function generateFromSeed(promptBundle, seedCode, model) {
+  let integration = await callCodingStage({
+    model,
+    maxTokens: 4000,
+    system: [
+      promptBundle.system,
+      "You are EDITING an existing, working game implementation, not writing one from scratch.",
+      "Start from the REFERENCE module below and modify it to satisfy the creator request.",
+      "Keep everything that already works: the game loop, input handling, rendering, and win/lose flow.",
+      "Change only what the request needs — theme, colors, rules tweaks, difficulty, labels, or mechanic variations.",
+      "Preserve the import lines and the #game canvas usage. Return one complete executable src/main.js module without markdown fences."
+    ].join("\n"),
+    user: [promptBundle.user, "\nREFERENCE MODULE (edit this, keep its structure):\n", seedCode].join("\n")
+  });
+  let generatedCode = stripMarkdownFence(integration.content);
+  let missing = missingRuntimeFeatures(generatedCode);
+
+  if (missing.length > 0) {
+    integration = await callCodingStage({
+      model,
+      maxTokens: 4000,
+      system: [
+        promptBundle.system,
+        "Repair the edited module so it runs as one complete src/main.js, not an explanation.",
+        "It must select document.querySelector(\"#game\"), obtain a 2D context, run requestAnimationFrame, handle pointer/touch and keyboard input, and support restart.",
+        "When unsure, keep the reference behavior. The previous output was missing: " + missing.join(", ") + "."
+      ].join("\n"),
+      user: [promptBundle.user, "\nEDITED MODULE:\n", generatedCode, "\nREFERENCE MODULE:\n", seedCode].join("\n")
+    });
+    generatedCode = stripMarkdownFence(integration.content);
+    missing = missingRuntimeFeatures(generatedCode);
+  }
+
+  if (missing.length > 0) {
+    // Agent could not produce a runnable edit — ship the working reference unchanged.
+    return {
+      provider: "reference",
+      model: "reference-seed",
+      generatedCode: seedCode,
+      usage: sumUsage([integration.usage]),
+      stages: { seedEdit: { model, usage: integration.usage } },
+      source: "seed-fallback"
+    };
+  }
+
+  return {
+    provider: integration.provider,
+    model: integration.model,
+    generatedCode,
+    usage: sumUsage([integration.usage]),
+    stages: { seedEdit: { model: integration.model, usage: integration.usage } },
+    source: "seed-edit"
+  };
+}
+
 async function call0GAgent(promptBundle) {
   try {
     return await generateWithModel(promptBundle, zeroGModels.coding);
@@ -224,7 +283,28 @@ export async function createRefinementBundle({ gamePackage, request, refinementL
   }
 
   const promptBundle = buildPromptBundle({ gamePackage, request });
-  const generated = await call0GAgent(promptBundle);
+  const reference = getReferenceGame(gamePackage.templateId);
+
+  let generated;
+  if (reference) {
+    try {
+      generated = await generateFromSeed(promptBundle, reference.code, zeroGModels.coding);
+    } catch (error) {
+      // Agent unreachable — ship the working reference unchanged so the user still gets a game.
+      generated = {
+        provider: "reference",
+        model: "reference-seed",
+        generatedCode: reference.code,
+        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+        stages: {},
+        source: "seed-fallback",
+        warning: error.message
+      };
+    }
+  } else {
+    generated = await call0GAgent(promptBundle);
+    generated.source = generated.source ?? "agent";
+  }
 
   return {
     jobId: `refine_${Date.now().toString(36)}`,
@@ -232,6 +312,8 @@ export async function createRefinementBundle({ gamePackage, request, refinementL
     costProfile: "0g-router-call",
     refinementLevel: refinementLevel ?? "medium",
     promptBundle,
+    seededFrom: reference?.templateId ?? null,
+    source: generated.source,
     provider: generated.provider,
     model: generated.model,
     generatedCode: generated.generatedCode,
