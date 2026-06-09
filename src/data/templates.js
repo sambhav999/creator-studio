@@ -42,6 +42,27 @@ export const templates = [
     }
   },
   {
+    id: "chess",
+    name: "Chess",
+    category: "Board",
+    estimatedSeconds: 30,
+    reliability: 1,
+    mechanic: "Click a piece, then a highlighted square. Full legal moves, check, checkmate, castling, en passant, promotion. Play White against a built-in AI.",
+    controls: "Click or tap a piece then its destination, R for a new game",
+    assets: "8x8 board, Unicode piece glyphs, move highlights, captured-piece tray",
+    specs: {
+      states: ["BOOT", "PLAY", "CHECKMATE", "STALEMATE"],
+      collision: ["legal-move validation", "king safety", "castling path checks"],
+      scoring: "captured material value"
+    },
+    difficulty: {
+      easy: { aiDepth: 0, aiDelayMs: 350 },
+      normal: { aiDepth: 1, aiDelayMs: 450 },
+      hard: { aiDepth: 1, aiDelayMs: 250 },
+      insane: { aiDepth: 1, aiDelayMs: 150 }
+    }
+  },
+  {
     id: "clicker",
     name: "Clicker Economy",
     category: "Idle",
