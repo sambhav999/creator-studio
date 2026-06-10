@@ -11,7 +11,9 @@ import {
   recordShare,
   getShareCount,
   getSocialStats,
+  getUserLikes,
 } from "../services/socialService.js";
+import { logActivity, getGameTitle, getUserActivities } from "../services/activityService.js";
 
 // ─── Schemas ───────────────────────────────────────────────────────────────
 
@@ -54,6 +56,17 @@ export async function handleToggleLike(req, res, next) {
   try {
     const { gameId, userId } = likeSchema.parse(req.body);
     const result = await toggleLike(gameId, userId);
+
+    // Log activity
+    const gameTitle = await getGameTitle(gameId);
+    await logActivity({
+      userId,
+      gameId,
+      gameTitle,
+      activityType: "like",
+      details: result.liked ? `Liked the game "${gameTitle || "game"}"` : `Removed like from "${gameTitle || "game"}"`
+    });
+
     res.json(result);
   } catch (error) {
     next(error);
@@ -79,6 +92,17 @@ export async function handleAddComment(req, res, next) {
   try {
     const { gameId, userId, username, text } = commentCreateSchema.parse(req.body);
     const result = await addComment(gameId, userId, username, text);
+
+    // Log activity
+    const gameTitle = await getGameTitle(gameId);
+    await logActivity({
+      userId,
+      gameId,
+      gameTitle,
+      activityType: "comment",
+      details: `Commented: "${text}" on "${gameTitle || "game"}"`
+    });
+
     res.status(201).json(result);
   } catch (error) {
     next(error);
@@ -119,6 +143,17 @@ export async function handleToggleFavorite(req, res, next) {
   try {
     const { gameId, userId } = favoriteSchema.parse(req.body);
     const result = await toggleFavorite(gameId, userId);
+
+    // Log activity
+    const gameTitle = await getGameTitle(gameId);
+    await logActivity({
+      userId,
+      gameId,
+      gameTitle,
+      activityType: "favorite",
+      details: result.favorited ? `Favorited the game "${gameTitle || "game"}"` : `Removed favorited status from "${gameTitle || "game"}"`
+    });
+
     res.json(result);
   } catch (error) {
     next(error);
@@ -155,6 +190,17 @@ export async function handleRecordShare(req, res, next) {
   try {
     const { gameId, userId, platform } = shareSchema.parse(req.body);
     const result = await recordShare(gameId, userId, platform);
+
+    // Log activity
+    const gameTitle = await getGameTitle(gameId);
+    await logActivity({
+      userId,
+      gameId,
+      gameTitle,
+      activityType: "share",
+      details: `Shared "${gameTitle || "game"}" via ${platform || "link"}`
+    });
+
     res.json(result);
   } catch (error) {
     next(error);
@@ -180,6 +226,27 @@ export async function handleGetSocialStats(req, res, next) {
     const { gameId } = gameIdSchema.parse(req.params);
     const userId = req.query.userId ?? null;
     const result = await getSocialStats(gameId, userId);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function handleGetUserActivities(req, res, next) {
+  try {
+    const { userId } = z.object({ userId: z.string().min(1) }).parse(req.params);
+    const activities = await getUserActivities(userId);
+    res.json(activities);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function handleGetUserLikes(req, res, next) {
+  try {
+    const { userId } = userIdSchema.parse(req.params);
+    const { page, limit } = paginationSchema.parse(req.query);
+    const result = await getUserLikes(userId, page, limit);
     res.json(result);
   } catch (error) {
     next(error);

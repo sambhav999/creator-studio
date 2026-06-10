@@ -434,21 +434,16 @@ export async function generateGameFromPrompt({
   };
 
   let plan = null;
-  if (includePlan) {
-    try {
-      plan = await createOrchestrationPlan({
+  const planPromise = includePlan
+    ? createOrchestrationPlan({
         prompt,
         context: {
           ...(context ?? {}),
           selectedTemplate: selection,
           gamePackage: game
         }
-      });
-      game.generation.planModel = plan.model;
-    } catch (error) {
-      warnings.push(`Orchestrator skipped: ${error.message}`);
-    }
-  }
+      })
+    : null;
 
   let refinement = null;
   let assets = null;
@@ -472,10 +467,20 @@ export async function generateGameFromPrompt({
       })
     : null;
 
-  const [codeResult, assetsResult] = await Promise.allSettled([
+  const [planResult, codeResult, assetsResult] = await Promise.allSettled([
+    planPromise,
     codePromise,
     assetsPromise
   ]);
+
+  if (includePlan) {
+    if (planResult.status === "fulfilled") {
+      plan = planResult.value;
+      game.generation.planModel = plan.model;
+    } else {
+      warnings.push(`Orchestrator skipped: ${planResult.reason.message}`);
+    }
+  }
 
   if (includeCode) {
     if (codeResult.status === "fulfilled") {

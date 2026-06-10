@@ -11,6 +11,8 @@ import {
   handleRecordShare,
   handleGetShareCount,
   handleGetSocialStats,
+  handleGetUserActivities,
+  handleGetUserLikes,
 } from "../controllers/socialController.js";
 
 export const socialRouter = Router();
@@ -21,6 +23,7 @@ socialRouter.get("/stats/:gameId", handleGetSocialStats);
 // Likes
 socialRouter.post("/likes/toggle", handleToggleLike);
 socialRouter.get("/likes/:gameId", handleGetLikeStatus);
+socialRouter.get("/likes/user/:userId", handleGetUserLikes);
 
 // Comments
 socialRouter.post("/comments", handleAddComment);
@@ -35,3 +38,6 @@ socialRouter.get("/favorites/user/:userId", handleGetUserFavorites);
 // Shares
 socialRouter.post("/shares", handleRecordShare);
 socialRouter.get("/shares/:gameId", handleGetShareCount);
+
+// User activities
+socialRouter.get("/activity/user/:userId", handleGetUserActivities);

@@ -254,3 +254,22 @@ export async function getSocialStats(gameId, userId) {
     shares: { count: share.count },
   };
 }
+
+export async function getUserLikes(userId, page = 1, limit = 20) {
+  const skip = (page - 1) * limit;
+  const col = await getCollection(COLLECTIONS.likes);
+
+  if (col) {
+    const [likes, count] = await Promise.all([
+      col.find({ userId }).sort({ createdAt: -1 }).skip(skip).limit(limit).toArray(),
+      col.countDocuments({ userId }),
+    ]);
+    return { likes, count, page, limit };
+  }
+
+  const results = [];
+  for (const [gameId, set] of memoryStore.likes) {
+    if (set.has(userId)) results.push({ gameId, userId });
+  }
+  return { likes: results.slice(skip, skip + limit), count: results.length, page, limit };
+}

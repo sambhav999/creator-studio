@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { getLeaderboard, submitScore } from "../services/leaderboardService.js";
+import { logActivity, getGameTitle } from "../services/activityService.js";
 
 const gameParamsSchema = z.object({
   gameId: z.string().min(1),
@@ -31,6 +32,17 @@ export async function handleSubmitScore(request, response, next) {
     const { gameId } = gameParamsSchema.parse(request.params);
     const input = scoreSchema.parse(request.body);
     const leaderboard = await submitScore({ gameId, ...input });
+
+    // Log play activity
+    const gameTitle = await getGameTitle(gameId);
+    await logActivity({
+      userId: input.userId,
+      gameId,
+      gameTitle,
+      activityType: "play",
+      details: `Scored ${input.score} points on ${gameTitle || "game"}`
+    });
+
     response.status(201).json(leaderboard);
   } catch (error) {
     next(error);

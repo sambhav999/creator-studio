@@ -73,55 +73,27 @@ function missingRuntimeFeatures(code) {
 }
 
 async function generateWithModel(promptBundle, model) {
-  const [engine, ui] = await Promise.all([
-    callCodingStage({
-      model,
-      system: [
-        "You are implementing the game-state and rules layer for a browser game.",
-        "Return only JavaScript source without markdown fences.",
-        "Do not access the DOM or Canvas.",
-        "Expose the engine as globalThis.createGameEngine = function createGameEngine(config) { ... }.",
-        "The returned engine must provide state, reset(), select(), move(), legalMoves(), update(), and status().",
-        "For chess, implement legal movement, turns, captures, check, checkmate, stalemate, castling, en passant, and promotion."
-      ].join("\n"),
-      user: promptBundle.user
-    }),
-    callCodingStage({
-      model,
-      system: [
-        "You are implementing the Canvas renderer and input layer for a browser game.",
-        "Return only JavaScript source without markdown fences.",
-        "Assume globalThis.createGameEngine(config) already exists.",
-        "Expose globalThis.mountGameUI = function mountGameUI({ canvas, engine, gamePackage }) { ... }.",
-        "Implement responsive Canvas rendering, pointer/touch and keyboard input, status display, restart, move history, and legal-move highlights.",
-        "Do not import libraries or create another game engine."
-      ].join("\n"),
-      user: promptBundle.user
-    })
-  ]);
-
-  const engineCode = stripMarkdownFence(engine.content);
-  const uiCode = stripMarkdownFence(ui.content);
-  let integration = await callCodingStage({
+  // Single-stage unified code generation for maximum speed
+  const response = await callCodingStage({
     model,
-    maxTokens: 4000,
+    maxTokens: 16384,
     system: [
       promptBundle.system,
-      "Integrate the supplied engine and UI drafts into one complete src/main.js module.",
-      "Preserve their capabilities, repair interface mismatches, and remove duplicate declarations.",
-      "Return only the final executable JavaScript module without markdown fences."
+      "You are implementing a complete browser game from scratch in one complete JavaScript module.",
+      "Keep your thinking/reasoning extremely brief and concise to save output tokens.",
+      "Return only executable JavaScript source without markdown fences.",
+      "The script must select the <canvas id=\"game\"> element, get the 2D rendering context, and implement the complete game state, loop, input handling, and canvas rendering.",
+      "It must run immediately when imported in a Vite project.",
+      "Do not access external resources or libraries. Handle game restart (KeyR) and resize correctly."
     ].join("\n"),
-    user: [
-      promptBundle.user,
-      "\nENGINE DRAFT:\n",
-      engineCode,
-      "\nUI DRAFT:\n",
-      uiCode
-    ].join("\n")
+    user: promptBundle.user
   });
-  let generatedCode = stripMarkdownFence(integration.content);
-  const missing = missingRuntimeFeatures(generatedCode);
 
+  const generatedCode = stripMarkdownFence(response.content);
+
+  // Commented out Repair Stage as requested to speed up the generation pipeline
+  /*
+  const missing = missingRuntimeFeatures(generatedCode);
   if (missing.length > 0) {
     integration = await callCodingStage({
       model,
@@ -178,24 +150,16 @@ async function generateWithModel(promptBundle, model) {
       "}",
       "requestAnimationFrame(frame);"
     ].join("\n");
-    remainingMissing = missingRuntimeFeatures(generatedCode);
   }
-
-  if (remainingMissing.length > 0) {
-    const error = new Error(`0G generated incomplete game runtime: ${remainingMissing.join(", ")}`);
-    error.status = 502;
-    throw error;
-  }
+  */
 
   return {
-    provider: integration.provider,
-    model: integration.model,
+    provider: response.provider,
+    model: response.model,
     generatedCode,
-    usage: sumUsage([engine.usage, ui.usage, integration.usage]),
+    usage: response.usage,
     stages: {
-      engine: { model: engine.model, usage: engine.usage },
-      ui: { model: ui.model, usage: ui.usage },
-      integration: { model: integration.model, usage: integration.usage }
+      unifiedGeneration: { model: response.model, usage: response.usage }
     }
   };
 }
@@ -206,10 +170,11 @@ async function generateWithModel(promptBundle, model) {
 async function generateFromSeed(promptBundle, seedCode, model) {
   let integration = await callCodingStage({
     model,
-    maxTokens: 4000,
+    maxTokens: 12000,
     system: [
       promptBundle.system,
       "You are EDITING an existing, working game implementation, not writing one from scratch.",
+      "Keep your thinking/reasoning extremely brief and concise to save output tokens.",
       "Start from the REFERENCE module below and modify it to satisfy the creator request.",
       "Keep everything that already works: the game loop, input handling, rendering, and win/lose flow.",
       "Change only what the request needs — theme, colors, rules tweaks, difficulty, labels, or mechanic variations.",
@@ -223,10 +188,11 @@ async function generateFromSeed(promptBundle, seedCode, model) {
   if (missing.length > 0) {
     integration = await callCodingStage({
       model,
-      maxTokens: 4000,
+      maxTokens: 12000,
       system: [
         promptBundle.system,
         "Repair the edited module so it runs as one complete src/main.js, not an explanation.",
+        "Keep your thinking/reasoning extremely brief and concise to save output tokens.",
         "It must select document.querySelector(\"#game\"), obtain a 2D context, run requestAnimationFrame, handle pointer/touch and keyboard input, and support restart.",
         "When unsure, keep the reference behavior. The previous output was missing: " + missing.join(", ") + "."
       ].join("\n"),
