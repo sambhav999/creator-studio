@@ -4,11 +4,13 @@ import express from "express";
 import helmet from "helmet";
 import morgan from "morgan";
 import { agentRouter } from "./routes/agentRoutes.js";
+import { authRouter } from "./routes/authRoutes.js";
 import { dashboardRouter } from "./routes/dashboardRoutes.js";
 import { gameRouter } from "./routes/gameRoutes.js";
 import { leaderboardRouter } from "./routes/leaderboardRoutes.js";
 import { socialRouter } from "./routes/socialRoutes.js";
 import { templateRouter } from "./routes/templateRoutes.js";
+import { thumbnailRouter } from "./routes/thumbnailRoutes.js";
 import { getDatabaseConfig } from "./services/databaseService.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 import { getZeroGConfig } from "./services/zeroGService.js";
@@ -17,7 +19,9 @@ dotenv.config();
 
 export const app = express();
 
-app.use(helmet());
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" }
+}));
 app.use(cors({
   origin: process.env.CORS_ORIGIN?.split(",").map(origin => origin.trim()) ?? true,
   exposedHeaders: ["Content-Disposition"]
@@ -58,12 +62,14 @@ const setupRoutes = (prefix) => {
     });
   });
 
+  app.use(`${prefix}/auth`, authRouter);
   app.use(`${prefix}/templates`, templateRouter);
   app.use(`${prefix}/games`, gameRouter);
   app.use(`${prefix}/leaderboards`, leaderboardRouter);
   app.use(`${prefix}/agents`, agentRouter);
   app.use(`${prefix}/dashboard`, dashboardRouter);
   app.use(`${prefix}/social`, socialRouter);
+  app.use(`${prefix}/thumbnails`, thumbnailRouter);
 };
 
 setupRoutes("/api");

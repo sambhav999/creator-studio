@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { updateGamePackageFields } from "../services/databaseService.js";
+import { getJob, serializeJob, startJob } from "../services/jobService.js";
 import { createRefinementBundle } from "../services/refinementService.js";
 import {
   analyzeReferenceImage,
@@ -17,7 +19,8 @@ const orchestrationSchema = z.object({
 const codeSchema = z.object({
   gamePackage: z.record(z.any()),
   request: z.string().optional(),
-  refinementLevel: z.string().optional()
+  refinementLevel: z.string().optional(),
+  strategy: z.string().optional()
 });
 
 const backgroundSchema = z.object({
@@ -60,14 +63,42 @@ export async function orchestrate(request, response, next) {
   }
 }
 
+// Code generation runs for minutes — return a jobId immediately and let the
+// client poll GET /agents/jobs/:id instead of holding the request open.
 export async function generateCode(request, response, next) {
   try {
     const input = codeSchema.parse(request.body);
-    const refinement = await createRefinementBundle(input);
-    response.status(202).json({ task: "code-generation", refinement });
+    const job = startJob("code-generation", async (updateProgress) => {
+      const refinement = await createRefinementBundle(input, { onProgress: updateProgress });
+      // Persist the build onto the saved game: without this, the generated
+      // code lived only in the requesting browser tab and was lost on reload.
+      // Field-targeted update — the thumbnail job may have already written its
+      // cover URL onto this game, and a whole-package save would clobber it.
+      if (input.gamePackage?.id) {
+        try {
+          await updateGamePackageFields(input.gamePackage.id, {
+            tier: "ai-refinement",
+            refinement
+          });
+        } catch (error) {
+          console.warn("Could not persist refinement to database", { message: error.message });
+        }
+      }
+      return refinement;
+    });
+    response.status(202).json({ task: "code-generation", ...serializeJob(job) });
   } catch (error) {
     next(error);
   }
+}
+
+export async function getJobStatus(request, response) {
+  const job = await getJob(request.params.jobId);
+  if (!job) {
+    response.status(404).json({ error: "Job not found or expired" });
+    return;
+  }
+  response.json(serializeJob(job));
 }
 
 export async function backgroundTask(request, response, next) {

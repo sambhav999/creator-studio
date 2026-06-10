@@ -1,9 +1,12 @@
 import { Router } from "express";
-import { createGame, exportGameCode, generateGame, refineGame } from "../controllers/gameController.js";
+import { createGame, deleteGame, exportGameCode, generateGame, listGames, refineGame } from "../controllers/gameController.js";
+import { requireAuth } from "../services/authService.js";
 
 export const gameRouter = Router();
 
-gameRouter.post("/create", createGame);
-gameRouter.post("/generate-from-prompt", generateGame);
-gameRouter.post("/refine", refineGame);
-gameRouter.post("/export-code", exportGameCode);
+gameRouter.get("/list", listGames);
+gameRouter.post("/create", requireAuth, createGame);
+gameRouter.post("/generate-from-prompt", requireAuth, generateGame);
+gameRouter.post("/refine", requireAuth, refineGame);
+gameRouter.post("/export-code", requireAuth, exportGameCode);
+gameRouter.delete("/:gameId", requireAuth, deleteGame);

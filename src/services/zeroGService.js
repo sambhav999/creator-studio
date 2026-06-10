@@ -83,6 +83,58 @@ function errorCauseDetails(error) {
   };
 }
 
+// Reads an OpenAI-compatible SSE stream and accumulates the assistant message.
+// Falls back to parsing a plain (non-streamed) JSON body if the provider
+// ignored stream: true.
+async function readChatStream(response, onChunk) {
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let raw = "";
+  let content = "";
+  let finishReason = null;
+  let usage = null;
+  let sawSse = false;
+
+  for await (const value of response.body) {
+    const text = decoder.decode(value, { stream: true });
+    buffer += text;
+    raw += text;
+
+    let newlineIndex;
+    while ((newlineIndex = buffer.indexOf("\n")) !== -1) {
+      const line = buffer.slice(0, newlineIndex).trim();
+      buffer = buffer.slice(newlineIndex + 1);
+      if (!line.startsWith("data:")) continue;
+      sawSse = true;
+      const payload = line.slice(5).trim();
+      if (!payload || payload === "[DONE]") continue;
+      try {
+        const chunk = JSON.parse(payload);
+        const choice = chunk.choices?.[0];
+        if (choice?.delta?.content) content += choice.delta.content;
+        if (choice?.message?.content) content += choice.message.content;
+        if (choice?.finish_reason) finishReason = choice.finish_reason;
+        if (chunk.usage) usage = chunk.usage;
+        onChunk?.(content.length);
+      } catch {
+        // ignore partial/keepalive lines
+      }
+    }
+  }
+
+  if (!sawSse) {
+    const data = raw ? JSON.parse(raw) : {};
+    const choice = data?.choices?.[0];
+    return {
+      content: choice?.message?.content ?? "",
+      finishReason: choice?.finish_reason ?? null,
+      usage: data.usage ?? null
+    };
+  }
+
+  return { content, finishReason, usage };
+}
+
 export async function callZeroGChat({
   model,
   messages,
@@ -90,7 +142,8 @@ export async function callZeroGChat({
   maxTokens = 2000,
   timeoutMs = 120000,
   retries = 2,
-  retryBaseDelayMs = 1000
+  retryBaseDelayMs = 1000,
+  onChunk
 }) {
   const { apiKey, baseUrl } = getClientConfig();
 
@@ -99,6 +152,10 @@ export async function callZeroGChat({
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
+      // Stream the completion: Node's fetch aborts any request whose response
+      // headers take more than 5 minutes (undici headersTimeout), and long
+      // non-streamed generations exceed that. With streaming, headers arrive
+      // immediately and tokens flow as they are produced.
       const response = await fetch(`${baseUrl}/chat/completions`, {
         method: "POST",
         signal: controller.signal,
@@ -110,12 +167,16 @@ export async function callZeroGChat({
           model,
           messages,
           temperature,
-          max_tokens: maxTokens
+          max_tokens: maxTokens,
+          stream: true
         })
       });
 
-      const data = await parseJsonResponse(response);
-      const content = data?.choices?.[0]?.message?.content;
+      if (!response.ok) {
+        await parseJsonResponse(response);
+      }
+
+      const { content, finishReason, usage } = await readChatStream(response, onChunk);
 
       if (!content) {
         const error = new Error("0G API returned no message content");
@@ -127,11 +188,13 @@ export async function callZeroGChat({
         provider: "0g",
         model,
         content,
-        usage: data.usage ?? null
+        finishReason,
+        usage
       };
     } catch (originalError) {
       let error = originalError;
-      if (error.name === "AbortError") {
+      const aborted = error.name === "AbortError" || error.cause?.name === "AbortError";
+      if (aborted) {
         error = new Error("0G API request timed out", { cause: originalError });
         error.status = 504;
       } else if (error instanceof SyntaxError) {
@@ -183,7 +246,7 @@ export async function runBackgroundTask({ task, input }) {
   return callZeroGChat({
     model: zeroGModels.background || zeroGModels.general,
     temperature: 0.2,
-    maxTokens: 1200,
+    maxTokens: 2000,
     messages: [
       {
         role: "system",

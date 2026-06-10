@@ -91,7 +91,9 @@ function normalizeSelection(selection, prompt) {
   };
 }
 
-async function chooseTemplateWithAgent(prompt, context) {
+// One background call does both routing and variation design — the previous
+// two sequential round-trips added 20-40s of latency and a second failure point.
+async function routeAndVaryWithAgent({ prompt, context, generationId }) {
   const localRecommendation = localTemplateSelection(prompt);
   const templateSummaries = templates.map(template => ({
     id: template.id,
@@ -104,9 +106,17 @@ async function chooseTemplateWithAgent(prompt, context) {
   }));
 
   const result = await runBackgroundTask({
-    task: "Choose the best game template and configuration. Return only JSON with templateId, theme, difficulty, customization, extra, reason.",
+    task: [
+      "Do two jobs in one response.",
+      "1) Choose the best game template and configuration for the prompt.",
+      "2) Create a distinct variation blueprint built on that template: preserve its reliable core loop, but change multiple meaningful details so repeat generations are not identical.",
+      "Return ONLY JSON shaped as:",
+      '{ "selection": { "templateId", "theme", "difficulty", "customization", "extra", "reason" },',
+      '"variation": { "title", "mechanicTwist", "behaviorChanges" (array), "tuningOverrides" (object of numeric/boolean values), "visualMood", "colors" (3-5 hex colors), "assetDirection", "scoringVariation", "thumbnailConcept", "uniquenessSummary" } }'
+    ].join(" "),
     input: {
       prompt,
+      generationId,
       context: context ?? null,
       localRecommendation,
       selectionRule:
@@ -115,69 +125,46 @@ async function chooseTemplateWithAgent(prompt, context) {
       allowedDifficulties: ["easy", "normal", "hard", "insane"],
       allowedCustomization: ["light", "medium", "heavy"],
       allowedExtra: ["none", "powerups", "leaderboard", "boss"],
-      templates: templateSummaries
-    }
-  });
-
-  return {
-    agent: result,
-    selection: normalizeSelection(extractJsonObject(result.content), prompt)
-  };
-}
-
-async function createHybridVariation({ prompt, context, selection, template, generationId }) {
-  const result = await runBackgroundTask({
-    task: [
-      "Create a distinct variation blueprint for a browser game built from the selected closest template.",
-      "Preserve the reliable core loop, but change multiple meaningful details so repeat generations are not identical.",
-      "Return ONLY JSON with title, mechanicTwist, behaviorChanges (array), tuningOverrides (object of numeric/boolean values),",
-      "visualMood, colors (3-5 hex colors), assetDirection, scoringVariation, thumbnailConcept, uniquenessSummary.",
-    ].join(" "),
-    input: {
-      prompt,
-      generationId,
-      selectedTemplate: {
-        id: template.id,
-        name: template.name,
-        category: template.category,
-        mechanic: template.mechanic,
-        controls: template.controls,
-        tuning: template.difficulty?.[selection.difficulty] ?? template.difficulty?.normal,
-        assets: template.assets,
-      },
+      templates: templateSummaries,
       recentCreations: context?.recentCreations ?? [],
       instruction:
-        "Avoid titles, color palettes, tuning combinations, obstacle patterns, scoring rules, and thumbnail compositions used by recentCreations.",
-    },
+        "Avoid titles, color palettes, tuning combinations, obstacle patterns, scoring rules, and thumbnail compositions used by recentCreations."
+    }
   });
 
   const parsed = extractJsonObject(result.content) ?? {};
   return {
     agent: result,
-    variation: {
-      title: parsed.title || `${template.name} ${generationId.slice(-4).toUpperCase()}`,
-      mechanicTwist:
-        parsed.mechanicTwist || `A distinct ${prompt} variation of ${template.mechanic}`,
-      behaviorChanges: Array.isArray(parsed.behaviorChanges)
-        ? parsed.behaviorChanges.slice(0, 8)
-        : ["Altered pacing", "Remixed obstacle timing", "Distinct scoring cadence"],
-      tuningOverrides:
-        parsed.tuningOverrides && typeof parsed.tuningOverrides === "object"
-          ? parsed.tuningOverrides
-          : {},
-      visualMood: parsed.visualMood || "distinctive high-energy game world",
-      colors:
-        Array.isArray(parsed.colors) && parsed.colors.length >= 3
-          ? parsed.colors.slice(0, 5)
-          : null,
-      assetDirection: parsed.assetDirection || template.assets,
-      scoringVariation: parsed.scoringVariation || "Reward skill streaks and clean play",
-      thumbnailConcept:
-        parsed.thumbnailConcept ||
-        `A unique action moment from ${template.name}, generation ${generationId}`,
-      uniquenessSummary:
-        parsed.uniquenessSummary || "Unique tuning, art direction, and scoring variation",
-    },
+    selection: normalizeSelection(parsed.selection, prompt),
+    rawVariation: parsed.variation ?? null
+  };
+}
+
+function normalizeVariation(parsed, { prompt, template, generationId }) {
+  parsed = parsed && typeof parsed === "object" ? parsed : {};
+  return {
+    title: parsed.title || `${template.name} ${generationId.slice(-4).toUpperCase()}`,
+    mechanicTwist:
+      parsed.mechanicTwist || `A distinct ${prompt} variation of ${template.mechanic}`,
+    behaviorChanges: Array.isArray(parsed.behaviorChanges)
+      ? parsed.behaviorChanges.slice(0, 8)
+      : ["Altered pacing", "Remixed obstacle timing", "Distinct scoring cadence"],
+    tuningOverrides:
+      parsed.tuningOverrides && typeof parsed.tuningOverrides === "object"
+        ? parsed.tuningOverrides
+        : {},
+    visualMood: parsed.visualMood || "distinctive high-energy game world",
+    colors:
+      Array.isArray(parsed.colors) && parsed.colors.length >= 3
+        ? parsed.colors.slice(0, 5)
+        : null,
+    assetDirection: parsed.assetDirection || template.assets,
+    scoringVariation: parsed.scoringVariation || "Reward skill streaks and clean play",
+    thumbnailConcept:
+      parsed.thumbnailConcept ||
+      `A unique action moment from ${template.name}, generation ${generationId}`,
+    uniquenessSummary:
+      parsed.uniquenessSummary || "Unique tuning, art direction, and scoring variation"
   };
 }
 
@@ -352,19 +339,11 @@ export async function generateGameFromPrompt({
   }
 
   if (strategy !== "pure-agent") {
-    selection = normalizeSelection(
-      {
-        templateId: context?.preferredTemplateId,
-        theme,
-        difficulty,
-        customization,
-        extra,
-      },
-      prompt,
-    );
+    let rawVariation = null;
     try {
-      routing = await chooseTemplateWithAgent(prompt, context);
+      routing = await routeAndVaryWithAgent({ prompt, context, generationId });
       selection = routing.selection;
+      rawVariation = routing.rawVariation;
     } catch (error) {
       warnings.push(`Background routing fallback: ${error.message}`);
       selection = normalizeSelection(
@@ -390,36 +369,16 @@ export async function generateGameFromPrompt({
 
     const selectedTemplate = templates.find(template => template.id === selection.templateId);
     if (selectedTemplate) {
-      try {
-        const variationResult = await createHybridVariation({
-          prompt,
-          context,
-          selection,
-          template: selectedTemplate,
-          generationId,
-        });
-        applyHybridVariation(game, variationResult.variation, generationId);
-        game.generation = {
-          variation: variationResult.variation,
-          variationModel: variationResult.agent.model,
-        };
-      } catch (error) {
-        warnings.push(`Variation agent fallback: ${error.message}`);
-        applyHybridVariation(
-          game,
-          {
-            title: `${game.title} ${generationId.slice(-4).toUpperCase()}`,
-            mechanicTwist: game.gameplay.mechanic,
-            behaviorChanges: ["Seeded pacing variation"],
-            tuningOverrides: {},
-            visualMood: game.visuals.mood,
-            colors: game.visuals.colors,
-            assetDirection: game.visuals.assets,
-            scoringVariation: game.gameplay.scoring,
-          },
-          generationId,
-        );
-      }
+      const variation = normalizeVariation(rawVariation, {
+        prompt,
+        template: selectedTemplate,
+        generationId
+      });
+      applyHybridVariation(game, variation, generationId);
+      game.generation = {
+        variation,
+        variationModel: routing?.agent?.model ?? null,
+      };
     }
   }
 
@@ -451,7 +410,8 @@ export async function generateGameFromPrompt({
     ? createRefinementBundle({
         gamePackage: game,
         request: prompt,
-        refinementLevel: selection.customization
+        refinementLevel: selection.customization,
+        strategy
       })
     : null;
   const assetsPromise = includeAssets

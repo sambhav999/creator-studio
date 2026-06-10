@@ -6,6 +6,13 @@ const server = app.listen(port, () => {
   console.log(`KULT Creator Studio API running on http://localhost:${port}`);
 });
 
+// Node defaults requestTimeout to 5 minutes, which killed long synchronous
+// generation requests. Long work now runs through the async job store, but
+// keep the server from aborting any remaining slow request.
+server.requestTimeout = 0;
+server.headersTimeout = 120000;
+server.keepAliveTimeout = 75000;
+
 server.on("error", error => {
   if (error.code === "EADDRINUSE") {
     console.error(

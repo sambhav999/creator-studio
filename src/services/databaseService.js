@@ -50,6 +50,45 @@ export async function saveGamePackage(gamePackage) {
   };
 }
 
+export async function listGamePackages({ limit = 50, search } = {}) {
+  const collection = await getGameCollection();
+  // Template auto-saves (every studio selection persists one) are not user
+  // creations — only prompt-generated games belong in the creations list.
+  const filter = { tier: { $ne: "template" } };
+  if (search) {
+    filter.$or = [
+      { id: search },
+      { title: { $regex: search, $options: "i" } },
+      { "customization.prompt": { $regex: search, $options: "i" } }
+    ];
+  }
+  return collection
+    .find(filter, { projection: { _id: 0 } })
+    .sort({ updatedAt: -1 })
+    .limit(limit)
+    .toArray();
+}
+
+// Targeted update: only touches the given fields. Background jobs (code,
+// thumbnail) finish at different times — saving a whole stale package from
+// one job would clobber what the other already wrote.
+export async function updateGamePackageFields(id, fields) {
+  const collection = await getGameCollection();
+  await collection.updateOne(
+    { id },
+    { $set: { ...fields, updatedAt: new Date() } }
+  );
+}
+
+export async function deleteGamePackage(id) {
+  const collection = await getGameCollection();
+  const result = await collection.deleteOne({ id });
+  // Remove the game's generated cover image alongside it.
+  const database = await getDatabase();
+  await database.collection("thumbnails").deleteOne({ templateId: id });
+  return { deleted: result.deletedCount > 0 };
+}
+
 export function getDatabaseConfig() {
   return {
     configured: Boolean(process.env.MONGODB_URI),

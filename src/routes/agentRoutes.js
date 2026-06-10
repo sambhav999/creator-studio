@@ -5,16 +5,19 @@ import {
   generateAssets,
   generateCode,
   getAgentStack,
+  getJobStatus,
   orchestrate,
   transcribeVoice
 } from "../controllers/agentController.js";
+import { requireAuth } from "../services/authService.js";
 
 export const agentRouter = Router();
 
 agentRouter.get("/stack", getAgentStack);
-agentRouter.post("/orchestrate", orchestrate);
-agentRouter.post("/code", generateCode);
-agentRouter.post("/background", backgroundTask);
-agentRouter.post("/assets", generateAssets);
-agentRouter.post("/vision", analyzeReference);
-agentRouter.post("/transcribe", transcribeVoice);
+agentRouter.get("/jobs/:jobId", getJobStatus);
+agentRouter.post("/orchestrate", requireAuth, orchestrate);
+agentRouter.post("/code", requireAuth, generateCode);
+agentRouter.post("/background", requireAuth, backgroundTask);
+agentRouter.post("/assets", requireAuth, generateAssets);
+agentRouter.post("/vision", requireAuth, analyzeReference);
+agentRouter.post("/transcribe", requireAuth, transcribeVoice);
