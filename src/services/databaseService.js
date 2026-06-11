@@ -55,11 +55,18 @@ export async function saveGamePackage(gamePackage) {
   };
 }
 
-export async function listGamePackages({ limit = 50, search } = {}) {
+export async function getGamePackageById(id) {
+  const collection = await getGameCollection();
+  return collection.findOne({ id }, { projection: { _id: 0 } });
+}
+
+export async function listGamePackages({ limit = 50, search, creatorId, ids } = {}) {
   const collection = await getGameCollection();
   // Template auto-saves (every studio selection persists one) are not user
   // creations — only prompt-generated games belong in the creations list.
   const filter = { tier: { $ne: "template" } };
+  if (creatorId) filter.creatorId = creatorId;
+  if (Array.isArray(ids) && ids.length > 0) filter.id = { $in: ids };
   if (search) {
     filter.$or = [
       { id: search },

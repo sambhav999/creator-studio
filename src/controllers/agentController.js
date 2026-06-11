@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { updateGamePackageFields } from "../services/databaseService.js";
+import { getGamePackageById, updateGamePackageFields } from "../services/databaseService.js";
 import { getJob, serializeJob, startJob } from "../services/jobService.js";
 import { createRefinementBundle } from "../services/refinementService.js";
 import {
@@ -71,6 +71,7 @@ export async function orchestrate(request, response, next) {
 export async function generateCode(request, response, next) {
   try {
     const input = codeSchema.parse(request.body);
+    const requesterId = request.auth?.userId ?? null;
     const job = startJob("code-generation", async (updateProgress) => {
       const refinement = await createRefinementBundle(input, { onProgress: updateProgress });
       // Persist the build onto the saved game: without this, the generated
@@ -79,10 +80,15 @@ export async function generateCode(request, response, next) {
       // cover URL onto this game, and a whole-package save would clobber it.
       if (input.gamePackage?.id) {
         try {
-          await updateGamePackageFields(input.gamePackage.id, {
-            tier: "ai-refinement",
-            refinement
-          });
+          // Only the game's creator may overwrite its stored build.
+          const stored = await getGamePackageById(input.gamePackage.id);
+          const owned = !stored?.creatorId || stored.creatorId === requesterId;
+          if (owned) {
+            await updateGamePackageFields(input.gamePackage.id, {
+              tier: "ai-refinement",
+              refinement
+            });
+          }
         } catch (error) {
           console.warn("Could not persist refinement to database", { message: error.message });
         }

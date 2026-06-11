@@ -19,6 +19,7 @@ import {
   handleGetFollowStatus,
   handleGetFollowing,
   handleGetCreatorStats,
+  handleGetTopViewed,
 } from "../controllers/socialController.js";
 
 export const socialRouter = Router();
@@ -49,6 +50,7 @@ socialRouter.get("/shares/:gameId", handleGetShareCount);
 socialRouter.get("/activity/user/:userId", handleGetUserActivities);
 
 // Views (plays)
+socialRouter.get("/views-top", handleGetTopViewed);
 socialRouter.post("/views/:gameId", handleRecordView);
 socialRouter.get("/views/:gameId", handleGetViewCount);
 

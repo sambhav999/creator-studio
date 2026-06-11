@@ -305,6 +305,22 @@ export async function getViewCount(gameId) {
   return { gameId, views: memoryStore.views.get(gameId) ?? 0 };
 }
 
+export async function getTopViewed(limit = 100) {
+  const col = await getCollection(COLLECTIONS.views);
+  if (col) {
+    const docs = await col
+      .find({}, { projection: { _id: 0, gameId: 1, count: 1 } })
+      .sort({ count: -1 })
+      .limit(limit)
+      .toArray();
+    return docs.map((d) => ({ gameId: d.gameId, views: d.count ?? 0 }));
+  }
+  return [...memoryStore.views.entries()]
+    .map(([gameId, count]) => ({ gameId, views: count }))
+    .sort((a, b) => b.views - a.views)
+    .slice(0, limit);
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 //  FOLLOWS (creator ↔ follower)
 // ═══════════════════════════════════════════════════════════════════════════

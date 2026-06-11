@@ -10,6 +10,17 @@ export async function serveThumbnail(request, response) {
       return;
     }
 
+    // Images live in object storage now — redirect so the browser fetches
+    // (and caches) straight from the bucket/CDN.
+    if (thumbnail.url) {
+      response.redirect(301, thumbnail.url);
+      return;
+    }
+    if (!thumbnail.data) {
+      response.status(404).json({ error: "Thumbnail not found", templateId });
+      return;
+    }
+
     const imageBuffer = thumbnail.data.buffer
       ? Buffer.from(thumbnail.data.buffer)
       : thumbnail.data;

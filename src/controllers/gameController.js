@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { buildGameCodeZip } from "../services/codeExportService.js";
-import { deleteGamePackage, listGamePackages, saveGamePackage } from "../services/databaseService.js";
+import { deleteGamePackage, getGamePackageById, listGamePackages, saveGamePackage } from "../services/databaseService.js";
 import { createGamePackage } from "../services/gameFactoryService.js";
 import { startJob } from "../services/jobService.js";
 import { generateGameFromPrompt } from "../services/promptPipelineService.js";
@@ -49,7 +49,11 @@ export async function listGames(request, response, next) {
   try {
     const limit = Math.min(Number(request.query.limit) || 50, 100);
     const search = request.query.search || request.query.q;
-    const games = await listGamePackages({ limit, search });
+    const creatorId = request.query.creatorId;
+    const ids = request.query.ids
+      ? String(request.query.ids).split(",").map((id) => id.trim()).filter(Boolean).slice(0, 100)
+      : undefined;
+    const games = await listGamePackages({ limit, search, creatorId, ids });
     response.json({ games });
   } catch (error) {
     next(error);
@@ -61,10 +65,22 @@ const saveSchema = z.object({
 });
 
 // Saves an edited game (title, settings, code) from the post-creation editor.
+// Only the creator may modify their game — wallet identity is the user.
 export async function saveGame(request, response, next) {
   try {
     const input = saveSchema.parse(request.body);
-    const gamePackage = { ...input.gamePackage, id: request.params.gameId };
+    const existing = await getGamePackageById(request.params.gameId);
+    const requester = request.auth?.userId;
+    if (existing?.creatorId && existing.creatorId !== requester) {
+      response.status(403).json({ error: "Only the creator can edit this game" });
+      return;
+    }
+    const gamePackage = {
+      ...input.gamePackage,
+      id: request.params.gameId,
+      // ownership is immutable through this endpoint
+      creatorId: existing?.creatorId ?? input.gamePackage.creatorId ?? requester ?? "anonymous"
+    };
     const persistence = await saveGamePackage(gamePackage);
     response.json({ ok: true, game: gamePackage, persistence });
   } catch (error) {
@@ -74,6 +90,12 @@ export async function saveGame(request, response, next) {
 
 export async function deleteGame(request, response, next) {
   try {
+    const existing = await getGamePackageById(request.params.gameId);
+    const requester = request.auth?.userId;
+    if (existing?.creatorId && existing.creatorId !== requester) {
+      response.status(403).json({ error: "Only the creator can delete this game" });
+      return;
+    }
     const { deleted } = await deleteGamePackage(request.params.gameId);
     if (!deleted) {
       response.status(404).json({ error: "Game not found" });

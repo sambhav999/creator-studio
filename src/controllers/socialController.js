@@ -6,6 +6,7 @@ import {
   getFollowStatus,
   getFollowingList,
   getCreatorStats,
+  getTopViewed,
   toggleLike,
   getLikeStatus,
   addComment,
@@ -320,6 +321,16 @@ export async function handleGetFollowing(req, res, next) {
 export async function handleGetCreatorStats(req, res, next) {
   try {
     res.json(await getCreatorStats(req.params.creatorId));
+  } catch (error) {
+    next(error);
+  }
+}
+
+
+export async function handleGetTopViewed(req, res, next) {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 100, 500);
+    res.json({ games: await getTopViewed(limit) });
   } catch (error) {
     next(error);
   }

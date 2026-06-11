@@ -1,4 +1,5 @@
 import { getDatabase, getGameCollection } from "./databaseService.js";
+import { isSpacesConfigured, uploadPublicObject } from "./spacesStorageService.js";
 import { generateImageAsset } from "./zeroGService.js";
 
 const COLLECTION_NAME = "thumbnails";
@@ -10,23 +11,31 @@ export async function getThumbnailCollection() {
 
 export async function uploadThumbnail(templateId, buffer, contentType, fileName) {
   const collection = await getThumbnailCollection();
+
+  // Primary store is DigitalOcean Spaces — Mongo keeps only the public URL.
+  if (isSpacesConfigured()) {
+    const url = await uploadPublicObject(`thumbnails/${encodeURIComponent(templateId)}`, buffer, contentType);
+    await collection.updateOne(
+      { templateId },
+      {
+        $set: { templateId, url, contentType, fileName, updatedAt: new Date() },
+        $unset: { data: "" },
+        $setOnInsert: { createdAt: new Date() }
+      },
+      { upsert: true }
+    );
+    return { templateId, contentType, fileName, url };
+  }
+
+  // Fallback (Spaces unconfigured): legacy binary storage.
   await collection.updateOne(
     { templateId },
     {
-      $set: {
-        templateId,
-        data: buffer,
-        contentType,
-        fileName,
-        updatedAt: new Date()
-      },
-      $setOnInsert: {
-        createdAt: new Date()
-      }
+      $set: { templateId, data: buffer, contentType, fileName, updatedAt: new Date() },
+      $setOnInsert: { createdAt: new Date() }
     },
     { upsert: true }
   );
-
   return { templateId, contentType, fileName };
 }
 
@@ -90,9 +99,26 @@ export async function generateAndStoreGameThumbnail(game) {
     throw new Error("Image agent returned no image");
   }
 
-  await uploadThumbnail(game.id, buffer, contentType, `${game.id}.png`);
+  // Primary store: DigitalOcean Spaces — the public URL goes onto the game
+  // record in MongoDB and the frontend renders it directly. Falls back to the
+  // Mongo-served thumbnail when Spaces is unavailable.
+  let thumbnailUrl;
+  if (isSpacesConfigured()) {
+    try {
+      thumbnailUrl = await uploadPublicObject(
+        `thumbnails/${encodeURIComponent(game.id)}`,
+        buffer,
+        contentType
+      );
+    } catch (error) {
+      console.warn("Spaces upload failed; falling back to Mongo thumbnail", { message: error.message });
+    }
+  }
+  if (!thumbnailUrl) {
+    await uploadThumbnail(game.id, buffer, contentType, `${game.id}.png`);
+    thumbnailUrl = `/api/thumbnails/${encodeURIComponent(game.id)}`;
+  }
 
-  const thumbnailUrl = `/api/thumbnails/${encodeURIComponent(game.id)}`;
   const games = await getGameCollection();
   await games.updateOne(
     { id: game.id },
