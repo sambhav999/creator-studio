@@ -20,7 +20,10 @@ const codeSchema = z.object({
   gamePackage: z.record(z.any()),
   request: z.string().optional(),
   refinementLevel: z.string().optional(),
-  strategy: z.string().optional()
+  strategy: z.string().optional(),
+  // Current build source — when present, the agent edits this code instead of
+  // generating from a template seed (post-creation "wish" edits).
+  baseCode: z.string().optional()
 });
 
 const backgroundSchema = z.object({

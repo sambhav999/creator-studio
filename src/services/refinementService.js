@@ -12,6 +12,7 @@ function buildPromptBundle({ gamePackage, request }) {
       "Import the game package with: import { gamePackage } from \"./gamePackage.js\";",
       "Import styles with: import \"./styles.css\";",
       "Do not use export statements anywhere in the module.",
+      "When a run ends (game over or win), call window.reportScore(finalScore) if it exists so the score reaches the platform leaderboard.",
       "Maintain responsive sizing, restart behavior, score/state feedback, and a 60 FPS target."
     ].join("\n"),
     user: [
@@ -322,7 +323,7 @@ async function ensureValidSyntax(generated, promptBundle, reference, onProgress)
 }
 
 export async function createRefinementBundle(
-  { gamePackage, request, refinementLevel, strategy },
+  { gamePackage, request, refinementLevel, strategy, baseCode },
   { onProgress } = {}
 ) {
   if (!gamePackage) {
@@ -332,10 +333,14 @@ export async function createRefinementBundle(
   }
 
   const promptBundle = buildPromptBundle({ gamePackage, request });
-  const reference = getReferenceGame(gamePackage.templateId);
+  // When the caller supplies the game's current code (post-creation editing),
+  // that code IS the seed — the agent applies the requested change to it.
+  const reference = baseCode
+    ? { templateId: gamePackage.templateId ?? "current-build", code: baseCode }
+    : getReferenceGame(gamePackage.templateId);
 
   let generated;
-  if (reference && strategy !== "pure-agent") {
+  if (reference && (baseCode || strategy !== "pure-agent")) {
     try {
       generated = await generateFromSeed(promptBundle, reference.code, zeroGModels.coding, onProgress);
     } catch (error) {

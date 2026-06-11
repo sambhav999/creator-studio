@@ -56,6 +56,22 @@ export async function listGames(request, response, next) {
   }
 }
 
+const saveSchema = z.object({
+  gamePackage: z.record(z.any())
+});
+
+// Saves an edited game (title, settings, code) from the post-creation editor.
+export async function saveGame(request, response, next) {
+  try {
+    const input = saveSchema.parse(request.body);
+    const gamePackage = { ...input.gamePackage, id: request.params.gameId };
+    const persistence = await saveGamePackage(gamePackage);
+    response.json({ ok: true, game: gamePackage, persistence });
+  } catch (error) {
+    next(error);
+  }
+}
+
 export async function deleteGame(request, response, next) {
   try {
     const { deleted } = await deleteGamePackage(request.params.gameId);
@@ -73,6 +89,7 @@ export async function createGame(request, response, next) {
   try {
     const input = createSchema.parse(request.body);
     const game = createGamePackage(input);
+    game.creatorId = input.userId ?? request.auth?.userId ?? "anonymous";
     const persistence = await saveGamePackage(game);
     if (input.userId) {
       await logActivity({
@@ -93,6 +110,8 @@ export async function generateGame(request, response, next) {
   try {
     const input = promptGenerateSchema.parse(request.body);
     const result = await generateGameFromPrompt(input);
+    // Attribute the game to its creator so follows and profile stats are real.
+    result.game.creatorId = input.userId ?? request.auth?.userId ?? "anonymous";
     const persistence = await saveGamePackage(result.game);
 
     // Every generated game (hybrid and pure-agent) gets a real cover image:

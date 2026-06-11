@@ -30,11 +30,16 @@ export async function getGameCollection() {
 
 export async function saveGamePackage(gamePackage) {
   const collection = await getGameCollection();
+  // Round-tripped packages can carry createdAt/_id from a previous read —
+  // they must not collide with $setOnInsert / the immutable _id.
+  const { _id, createdAt, ...fields } = gamePackage;
+  void _id;
+  void createdAt;
   await collection.updateOne(
     { id: gamePackage.id },
     {
       $set: {
-        ...gamePackage,
+        ...fields,
         updatedAt: new Date()
       },
       $setOnInsert: {

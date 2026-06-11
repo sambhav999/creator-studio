@@ -13,6 +13,12 @@ import {
   handleGetSocialStats,
   handleGetUserActivities,
   handleGetUserLikes,
+  handleRecordView,
+  handleGetViewCount,
+  handleToggleFollow,
+  handleGetFollowStatus,
+  handleGetFollowing,
+  handleGetCreatorStats,
 } from "../controllers/socialController.js";
 
 export const socialRouter = Router();
@@ -41,3 +47,15 @@ socialRouter.get("/shares/:gameId", handleGetShareCount);
 
 // User activities
 socialRouter.get("/activity/user/:userId", handleGetUserActivities);
+
+// Views (plays)
+socialRouter.post("/views/:gameId", handleRecordView);
+socialRouter.get("/views/:gameId", handleGetViewCount);
+
+// Follows
+socialRouter.post("/follows/toggle", handleToggleFollow);
+socialRouter.get("/follows/user/:userId", handleGetFollowing);
+socialRouter.get("/follows/:creatorId", handleGetFollowStatus);
+
+// Creator profile stats (real numbers)
+socialRouter.get("/creator-stats/:creatorId", handleGetCreatorStats);

@@ -1,5 +1,11 @@
 import { z } from "zod";
 import {
+  recordView,
+  getViewCount,
+  toggleFollow,
+  getFollowStatus,
+  getFollowingList,
+  getCreatorStats,
   toggleLike,
   getLikeStatus,
   addComment,
@@ -248,6 +254,72 @@ export async function handleGetUserLikes(req, res, next) {
     const { page, limit } = paginationSchema.parse(req.query);
     const result = await getUserLikes(userId, page, limit);
     res.json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+
+const viewSchema = z.object({
+  userId: z.string().optional(),
+});
+
+export async function handleRecordView(req, res, next) {
+  try {
+    const { gameId } = req.params;
+    const { userId } = viewSchema.parse(req.body ?? {});
+    const result = await recordView(gameId, userId);
+    res.status(201).json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function handleGetViewCount(req, res, next) {
+  try {
+    res.json(await getViewCount(req.params.gameId));
+  } catch (error) {
+    next(error);
+  }
+}
+
+const followSchema = z.object({
+  creatorId: z.string().min(1),
+  userId: z.string().min(1),
+});
+
+export async function handleToggleFollow(req, res, next) {
+  try {
+    const { creatorId, userId } = followSchema.parse(req.body);
+    if (creatorId === userId) {
+      res.status(400).json({ error: "You cannot follow yourself" });
+      return;
+    }
+    res.status(201).json(await toggleFollow(creatorId, userId));
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function handleGetFollowStatus(req, res, next) {
+  try {
+    res.json(await getFollowStatus(req.params.creatorId, req.query.userId));
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function handleGetFollowing(req, res, next) {
+  try {
+    res.json(await getFollowingList(req.params.userId));
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function handleGetCreatorStats(req, res, next) {
+  try {
+    res.json(await getCreatorStats(req.params.creatorId));
   } catch (error) {
     next(error);
   }

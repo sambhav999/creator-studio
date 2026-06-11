@@ -7,7 +7,7 @@ const gameParamsSchema = z.object({
 });
 
 const leaderboardQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).max(100).default(50),
+  limit: z.coerce.number().int().min(1).max(500).default(500),
 });
 
 const scoreSchema = z.object({

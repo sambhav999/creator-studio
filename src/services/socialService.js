@@ -1,10 +1,12 @@
-import { getDatabase } from "./databaseService.js";
+import { getDatabase, getGameCollection } from "./databaseService.js";
 
 const COLLECTIONS = {
   likes: "social_likes",
   comments: "social_comments",
   favorites: "social_favorites",
   shares: "social_shares",
+  views: "social_views",
+  follows: "social_follows",
 };
 
 // ─── In-memory fallback when MongoDB is unavailable ────────────────────────
@@ -13,6 +15,8 @@ const memoryStore = {
   comments: new Map(),    // gameId → Array<comment>
   favorites: new Map(),   // gameId → Set<userId>
   shares: new Map(),      // gameId → count
+  views: new Map(),       // gameId → count
+  follows: new Map(),     // creatorId → Set<followerId>
 };
 
 async function getCollection(name) {
@@ -240,11 +244,12 @@ export async function getShareCount(gameId) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 export async function getSocialStats(gameId, userId) {
-  const [like, comments, favorite, share] = await Promise.all([
+  const [like, comments, favorite, share, view] = await Promise.all([
     getLikeStatus(gameId, userId),
     getComments(gameId, 1, 0), // just count
     getFavoriteStatus(gameId, userId),
     getShareCount(gameId),
+    getViewCount(gameId),
   ]);
 
   return {
@@ -252,8 +257,128 @@ export async function getSocialStats(gameId, userId) {
     comments: { count: comments.count },
     favorites: { favorited: favorite.favorited, count: favorite.count },
     shares: { count: share.count },
+    views: { count: view.views },
   };
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  VIEWS (plays)
+// ═══════════════════════════════════════════════════════════════════════════
+
+export async function recordView(gameId, userId) {
+  const col = await getCollection(COLLECTIONS.views);
+  let count;
+  if (col) {
+    await col.updateOne(
+      { gameId },
+      {
+        $inc: { count: 1 },
+        $addToSet: { viewers: userId ?? "anon" },
+        $setOnInsert: { gameId, createdAt: new Date() },
+      },
+      { upsert: true },
+    );
+    const doc = await col.findOne({ gameId });
+    count = doc?.count ?? 1;
+  } else {
+    count = (memoryStore.views.get(gameId) ?? 0) + 1;
+    memoryStore.views.set(gameId, count);
+  }
+
+  // Mirror onto the game record so list endpoints can show real play counts.
+  try {
+    const games = await getGameCollection();
+    await games.updateOne({ id: gameId }, { $set: { views: count } });
+  } catch {
+    // game collection unavailable — the views collection still has the truth
+  }
+
+  return { gameId, views: count };
+}
+
+export async function getViewCount(gameId) {
+  const col = await getCollection(COLLECTIONS.views);
+  if (col) {
+    const doc = await col.findOne({ gameId });
+    return { gameId, views: doc?.count ?? 0 };
+  }
+  return { gameId, views: memoryStore.views.get(gameId) ?? 0 };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  FOLLOWS (creator ↔ follower)
+// ═══════════════════════════════════════════════════════════════════════════
+
+export async function toggleFollow(creatorId, followerId) {
+  const col = await getCollection(COLLECTIONS.follows);
+  if (col) {
+    const existing = await col.findOne({ creatorId, followerId });
+    if (existing) {
+      await col.deleteOne({ _id: existing._id });
+    } else {
+      await col.insertOne({ creatorId, followerId, createdAt: new Date() });
+    }
+    const followers = await col.countDocuments({ creatorId });
+    return { creatorId, following: !existing, followers };
+  }
+
+  const set = memoryStore.follows.get(creatorId) ?? new Set();
+  const following = !set.has(followerId);
+  if (following) set.add(followerId);
+  else set.delete(followerId);
+  memoryStore.follows.set(creatorId, set);
+  return { creatorId, following, followers: set.size };
+}
+
+export async function getFollowStatus(creatorId, followerId) {
+  const col = await getCollection(COLLECTIONS.follows);
+  if (col) {
+    const [existing, followers] = await Promise.all([
+      followerId ? col.findOne({ creatorId, followerId }) : null,
+      col.countDocuments({ creatorId }),
+    ]);
+    return { creatorId, following: Boolean(existing), followers };
+  }
+  const set = memoryStore.follows.get(creatorId) ?? new Set();
+  return { creatorId, following: followerId ? set.has(followerId) : false, followers: set.size };
+}
+
+export async function getFollowingList(followerId) {
+  const col = await getCollection(COLLECTIONS.follows);
+  if (col) {
+    const docs = await col.find({ followerId }).toArray();
+    return { followerId, following: docs.map((d) => d.creatorId) };
+  }
+  const following = [];
+  for (const [creatorId, set] of memoryStore.follows) {
+    if (set.has(followerId)) following.push(creatorId);
+  }
+  return { followerId, following };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  CREATOR STATS (real profile numbers)
+// ═══════════════════════════════════════════════════════════════════════════
+
+export async function getCreatorStats(creatorId) {
+  try {
+    const games = await getGameCollection();
+    const ownGames = await games
+      .find({ creatorId, tier: { $ne: "template" } }, { projection: { id: 1, views: 1 } })
+      .toArray();
+    const gameIds = ownGames.map((g) => g.id);
+    const db = await getDatabase();
+    const [likes, followers] = await Promise.all([
+      gameIds.length ? db.collection(COLLECTIONS.likes).countDocuments({ gameId: { $in: gameIds } }) : 0,
+      db.collection(COLLECTIONS.follows).countDocuments({ creatorId }),
+    ]);
+    const plays = ownGames.reduce((total, g) => total + (g.views ?? 0), 0);
+    return { creatorId, games: ownGames.length, plays, likes, followers };
+  } catch {
+    return { creatorId, games: 0, plays: 0, likes: 0, followers: 0 };
+  }
+}
+
 
 export async function getUserLikes(userId, page = 1, limit = 20) {
   const skip = (page - 1) * limit;
