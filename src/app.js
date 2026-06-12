@@ -11,9 +11,11 @@ import { leaderboardRouter } from "./routes/leaderboardRoutes.js";
 import { socialRouter } from "./routes/socialRoutes.js";
 import { templateRouter } from "./routes/templateRoutes.js";
 import { thumbnailRouter } from "./routes/thumbnailRoutes.js";
+import { referralAdminRouter, referralRouter } from "./routes/referralRoutes.js";
 import { getDatabaseConfig } from "./services/databaseService.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 import { getZeroGConfig } from "./services/zeroGService.js";
+import { requestIp, trackReferralClick } from "./services/referralService.js";
 
 dotenv.config();
 
@@ -24,6 +26,7 @@ app.use(helmet({
 }));
 app.use(cors({
   origin: process.env.CORS_ORIGIN?.split(",").map(origin => origin.trim()) ?? true,
+  credentials: true,
   exposedHeaders: ["Content-Disposition"]
 }));
 app.use(express.json({ limit: "20mb" }));
@@ -51,6 +54,25 @@ app.get("/", (_request, response) => {
   });
 });
 
+app.get("/r/:code", (request, response) => {
+  void trackReferralClick({
+    code: request.params.code,
+    ip: requestIp(request),
+    userAgent: request.get("user-agent")
+  }).catch(() => {});
+  response.cookie("kult_ref", request.params.code, {
+    httpOnly: true,
+    maxAge: 30 * 24 * 60 * 60 * 1000,
+    path: "/",
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production"
+  });
+  const destination = process.env.PUBLIC_APP_URL
+    || process.env.CORS_ORIGIN?.split(",")[0]?.trim()
+    || "http://localhost:5173/studio";
+  response.redirect(302, destination);
+});
+
 const setupRoutes = (prefix) => {
   app.get(`${prefix}/health`, (_request, response) => {
     response.json({
@@ -70,6 +92,8 @@ const setupRoutes = (prefix) => {
   app.use(`${prefix}/dashboard`, dashboardRouter);
   app.use(`${prefix}/social`, socialRouter);
   app.use(`${prefix}/thumbnails`, thumbnailRouter);
+  app.use(`${prefix}/referral`, referralRouter);
+  app.use(`${prefix}/admin/referral`, referralAdminRouter);
 };
 
 setupRoutes("/api");

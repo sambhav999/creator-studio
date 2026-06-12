@@ -5,7 +5,7 @@ Express API for the **KULT Creator Studio** template-first game creation flow. H
 ---
 
 ## 🚀 Technology Stack
-
+e
 | Technology | Version | Purpose |
 | :--- | :--- | :--- |
 | **Express** | 4.18.2 | HTTP server framework |
@@ -175,6 +175,16 @@ All routes are mounted at both `/api` and `/` prefixes (dual-mount in `app.js`).
 | Method | Endpoint | Description |
 | :--- | :--- | :--- |
 | `GET` | `/api/dashboard/creator` | Returns creator analytics (mock data: stats, pipeline, recent games) |
+
+### Referrals
+
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `GET` | `/r/:code` | Store the referral cookie for 30 days and redirect to Creator Studio |
+| `GET` | `/api/referral/me` | Return the current user's permanent code, link, rewarded count, and referral KP |
+| `POST` | `/api/referral/qualify` | Qualify the referred user's first completed game session over 30 seconds |
+| `GET` | `/api/admin/referral/held` | List same-IP or velocity-held referrals |
+| `POST` | `/api/admin/referral/:id/approve` | Approve a held referral and issue both rewards |
 
 ---
 
