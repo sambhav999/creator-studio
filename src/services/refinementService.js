@@ -150,6 +150,7 @@ async function generateWithModel(promptBundle, model, onProgress) {
       "You are implementing a complete browser game from scratch in one complete JavaScript module.",
       "Keep your thinking/reasoning extremely brief and concise to save output tokens.",
       `Keep the complete module under ${SCRATCH_CHAR_TARGET.toLocaleString("en-US")} characters: favor compact, focused gameplay over decorative extras, and never pad with comments.`,
+      "Make the game fill the entire browser viewport: set canvas.width = window.innerWidth and canvas.height = window.innerHeight on startup and on every window resize, and position/scale all gameplay relative to the current canvas size (no fixed 960x540 layouts).",
       "Return only executable JavaScript source without markdown fences.",
       "The script must select the <canvas id=\"game\"> element, get the 2D rendering context, and implement the complete game state, loop, input handling, and canvas rendering.",
       "It must run immediately when imported in a Vite project.",

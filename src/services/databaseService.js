@@ -65,6 +65,21 @@ export async function listGamePackages({ limit = 50, search, creatorId, ids, pub
   // Template auto-saves (every studio selection persists one) are not user
   // creations — only prompt-generated games belong in the creations list.
   const filter = { tier: { $ne: "template" } };
+  // Dead drafts: pure-agent games whose build never delivered code. A real
+  // build finishes (or fails) within ~16 minutes, so anything older is junk
+  // from an interrupted build and must not show in any list. createdAt is a
+  // Date for some writers and an ISO string for others — match both shapes.
+  const deadDraftCutoff = new Date(Date.now() - 20 * 60 * 1000);
+  filter.$nor = [
+    {
+      templateId: "pure-agent",
+      "refinement.generatedCode": { $exists: false },
+      $or: [
+        { createdAt: { $lt: deadDraftCutoff } },
+        { createdAt: { $type: "string", $lt: deadDraftCutoff.toISOString() } }
+      ]
+    }
+  ];
   if (publishedOnly) filter["publish.published"] = true;
   if (creatorId) filter.creatorId = creatorId;
   if (Array.isArray(ids) && ids.length > 0) filter.id = { $in: ids };
