@@ -132,16 +132,24 @@ function missingRuntimeFeatures(code) {
   return checks.filter(([, pattern]) => !pattern.test(code)).map(([label]) => label);
 }
 
+// From-scratch generation is capped at ~10,000 characters of code: generation
+// time scales linearly with output length, and the cap keeps a pure-agent
+// build inside a single response (no slow continuation round). 10K chars is
+// ~3K tokens; the 6144 ceiling leaves headroom without allowing 16K-token runs.
+const SCRATCH_CHAR_TARGET = 10000;
+const SCRATCH_MAX_TOKENS = 6144;
+
 async function generateWithModel(promptBundle, model, onProgress) {
   // Single-stage unified code generation for maximum speed
   const response = await callCodingStage({
     model,
-    maxTokens: 16384,
+    maxTokens: SCRATCH_MAX_TOKENS,
     onChunk: (chars) => onProgress?.({ stage: "writing-code", chars }),
     system: [
       promptBundle.system,
       "You are implementing a complete browser game from scratch in one complete JavaScript module.",
       "Keep your thinking/reasoning extremely brief and concise to save output tokens.",
+      `Keep the complete module under ${SCRATCH_CHAR_TARGET.toLocaleString("en-US")} characters: favor compact, focused gameplay over decorative extras, and never pad with comments.`,
       "Return only executable JavaScript source without markdown fences.",
       "The script must select the <canvas id=\"game\"> element, get the 2D rendering context, and implement the complete game state, loop, input handling, and canvas rendering.",
       "It must run immediately when imported in a Vite project.",
@@ -163,7 +171,7 @@ async function generateWithModel(promptBundle, model, onProgress) {
   if (missing.length > 0) {
     const repair = await callCodingStage({
       model: zeroGModels.background,
-      maxTokens: 16384,
+      maxTokens: SCRATCH_MAX_TOKENS,
       onChunk: (chars) => onProgress?.({ stage: "repairing", chars }),
       system: [
         promptBundle.system,
