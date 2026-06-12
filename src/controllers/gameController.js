@@ -1,6 +1,12 @@
 import { z } from "zod";
 import { buildGameCodeZip } from "../services/codeExportService.js";
-import { deleteGamePackage, getGamePackageById, listGamePackages, saveGamePackage } from "../services/databaseService.js";
+import {
+  deleteGamePackage,
+  getGamePackageById,
+  listGamePackages,
+  saveGamePackage,
+  updateGamePackageFields
+} from "../services/databaseService.js";
 import { createGamePackage } from "../services/gameFactoryService.js";
 import { startJob } from "../services/jobService.js";
 import { generateGameFromPrompt } from "../services/promptPipelineService.js";
@@ -50,11 +56,120 @@ export async function listGames(request, response, next) {
     const limit = Math.min(Number(request.query.limit) || 50, 100);
     const search = request.query.search || request.query.q;
     const creatorId = request.query.creatorId;
+    if (creatorId && creatorId !== request.auth?.userId) {
+      response.status(403).json({ error: "You can only list your own draft games" });
+      return;
+    }
     const ids = request.query.ids
       ? String(request.query.ids).split(",").map((id) => id.trim()).filter(Boolean).slice(0, 100)
       : undefined;
-    const games = await listGamePackages({ limit, search, creatorId, ids });
+    const games = await listGamePackages({
+      limit,
+      search,
+      creatorId,
+      ids,
+      publishedOnly: !creatorId
+    });
     response.json({ games });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function showPublicGame(request, response, next) {
+  try {
+    const game = await getGamePackageById(request.params.gameId);
+    if (!game || game.publish?.published !== true) {
+      response.status(404).json({ error: "Published game not found" });
+      return;
+    }
+    response.json({ game });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function showManagedGame(request, response, next) {
+  try {
+    const game = await getGamePackageById(request.params.gameId);
+    if (!game) {
+      response.status(404).json({ error: "Game not found" });
+      return;
+    }
+    if (game.creatorId && game.creatorId !== request.auth?.userId) {
+      response.status(403).json({ error: "Only the creator can access this draft" });
+      return;
+    }
+    response.json({ game });
+  } catch (error) {
+    next(error);
+  }
+}
+
+function canPublish(game) {
+  if (game?.templateId === "pure-agent") {
+    return Boolean(game?.refinement?.generatedCode);
+  }
+  return Boolean(game?.refinement?.generatedCode || game?.build?.publishReady);
+}
+
+export async function publishGame(request, response, next) {
+  try {
+    const game = await getGamePackageById(request.params.gameId);
+    if (!game) {
+      response.status(404).json({ error: "Game not found" });
+      return;
+    }
+    if (game.creatorId && game.creatorId !== request.auth?.userId) {
+      response.status(403).json({ error: "Only the creator can publish this game" });
+      return;
+    }
+    if (!canPublish(game)) {
+      response.status(409).json({
+        error: "This game is still building. Publish it after a playable build is ready."
+      });
+      return;
+    }
+
+    const publishedAt = new Date();
+    const publish = {
+      ...(game.publish ?? {}),
+      published: true,
+      status: "published",
+      publishedAt,
+      playPath: `/studio/play/${game.id}`
+    };
+    await updateGamePackageFields(game.id, { publish });
+    response.json({
+      ok: true,
+      game: { ...game, publish },
+      playPath: publish.playPath
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function unpublishGame(request, response, next) {
+  try {
+    const game = await getGamePackageById(request.params.gameId);
+    if (!game) {
+      response.status(404).json({ error: "Game not found" });
+      return;
+    }
+    if (game.creatorId && game.creatorId !== request.auth?.userId) {
+      response.status(403).json({ error: "Only the creator can unpublish this game" });
+      return;
+    }
+
+    const publish = {
+      ...(game.publish ?? {}),
+      published: false,
+      status: "draft",
+      unpublishedAt: new Date()
+    };
+    await updateGamePackageFields(game.id, { publish });
+    response.json({ ok: true, game: { ...game, publish } });
   } catch (error) {
     next(error);
   }
@@ -79,7 +194,13 @@ export async function saveGame(request, response, next) {
       ...input.gamePackage,
       id: request.params.gameId,
       // ownership is immutable through this endpoint
-      creatorId: existing?.creatorId ?? input.gamePackage.creatorId ?? requester ?? "anonymous"
+      creatorId: existing?.creatorId ?? input.gamePackage.creatorId ?? requester ?? "anonymous",
+      // Publication is controlled by the dedicated publish endpoints so a
+      // normal save cannot accidentally expose a draft or unpublish a game.
+      publish: existing?.publish ?? input.gamePackage.publish ?? {
+        published: false,
+        status: "draft"
+      }
     };
     const persistence = await saveGamePackage(gamePackage);
     response.json({ ok: true, game: gamePackage, persistence });
@@ -111,11 +232,11 @@ export async function createGame(request, response, next) {
   try {
     const input = createSchema.parse(request.body);
     const game = createGamePackage(input);
-    game.creatorId = input.userId ?? request.auth?.userId ?? "anonymous";
+    game.creatorId = request.auth?.userId ?? "anonymous";
     const persistence = await saveGamePackage(game);
-    if (input.userId) {
+    if (game.creatorId) {
       await logActivity({
-        userId: input.userId,
+        userId: game.creatorId,
         gameId: game.id,
         gameTitle: game.title,
         activityType: "create",
@@ -133,7 +254,12 @@ export async function generateGame(request, response, next) {
     const input = promptGenerateSchema.parse(request.body);
     const result = await generateGameFromPrompt(input);
     // Attribute the game to its creator so follows and profile stats are real.
-    result.game.creatorId = input.userId ?? request.auth?.userId ?? "anonymous";
+    result.game.creatorId = request.auth?.userId ?? "anonymous";
+    result.game.publish = {
+      ...(result.game.publish ?? {}),
+      published: false,
+      status: "draft"
+    };
     const persistence = await saveGamePackage(result.game);
 
     // Every generated game (hybrid and pure-agent) gets a real cover image:
@@ -144,9 +270,9 @@ export async function generateGame(request, response, next) {
       generateAndStoreGameThumbnail(result.game)
     );
     result.game.thumbnailJobId = thumbnailJob.id;
-    if (input.userId) {
+    if (result.game.creatorId) {
       await logActivity({
-        userId: input.userId,
+        userId: result.game.creatorId,
         gameId: result.game.id,
         gameTitle: result.game.title,
         activityType: "create",

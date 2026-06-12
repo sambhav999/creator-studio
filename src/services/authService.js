@@ -67,3 +67,24 @@ export function requireAuth(request, response, next) {
     response.status(error.status ?? 401).json({ error: error.message });
   }
 }
+
+/**
+ * Attaches a verified identity when a Bearer token is present, while allowing
+ * genuinely public requests to continue without one.
+ */
+export function optionalAuth(request, response, next) {
+  const header = request.headers.authorization || "";
+  const token = header.startsWith("Bearer ") ? header.slice(7).trim() : null;
+
+  if (!token) {
+    next();
+    return;
+  }
+
+  try {
+    request.auth = verifyToken(token);
+    next();
+  } catch (error) {
+    response.status(error.status ?? 401).json({ error: error.message });
+  }
+}

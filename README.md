@@ -153,6 +153,10 @@ All routes are mounted at both `/api` and `/` prefixes (dual-mount in `app.js`).
 | `POST` | `/api/games/generate-from-prompt` | One-click prompt-to-game pipeline: route prompt, create package, optionally plan/code/assets |
 | `POST` | `/api/games/refine` | Create an LLM-ready prompt bundle for Tier 2 refinement |
 | `POST` | `/api/games/export-code` | Generate and download a source code ZIP archive |
+| `GET` | `/api/games/:gameId` | Publicly load one published game |
+| `GET` | `/api/games/:gameId/manage` | Creator-only load of a draft or published game |
+| `POST` | `/api/games/:gameId/publish` | Publish a playable game and return its public play path |
+| `DELETE` | `/api/games/:gameId/publish` | Unpublish a game and invalidate its public URL |
 
 ### Agents
 

@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { getGamePackageById, updateGamePackageFields } from "../services/databaseService.js";
+import {
+  getGamePackageById,
+  saveGamePackage,
+  updateGamePackageFields
+} from "../services/databaseService.js";
 import { getJob, serializeJob, startJob } from "../services/jobService.js";
 import { createRefinementBundle } from "../services/refinementService.js";
 import {
@@ -84,10 +88,27 @@ export async function generateCode(request, response, next) {
           const stored = await getGamePackageById(input.gamePackage.id);
           const owned = !stored?.creatorId || stored.creatorId === requesterId;
           if (owned) {
-            await updateGamePackageFields(input.gamePackage.id, {
-              tier: "ai-refinement",
-              refinement
-            });
+            if (stored) {
+              await updateGamePackageFields(input.gamePackage.id, {
+                tier: "ai-refinement",
+                refinement
+              });
+            } else {
+              // A confident local template match skips the initial prompt
+              // routing request, so this code job may be the first backend
+              // contact for the game. Persist it now so it can be published.
+              await saveGamePackage({
+                ...input.gamePackage,
+                creatorId: requesterId ?? "anonymous",
+                tier: "ai-refinement",
+                refinement,
+                publish: {
+                  ...(input.gamePackage.publish ?? {}),
+                  published: false,
+                  status: "draft"
+                }
+              });
+            }
           }
         } catch (error) {
           console.warn("Could not persist refinement to database", { message: error.message });

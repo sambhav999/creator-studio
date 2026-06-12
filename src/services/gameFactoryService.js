@@ -54,6 +54,8 @@ export function createGamePackage(input) {
       publishReady: true
     },
     publish: {
+      published: false,
+      status: "draft",
       ipfsReady: true,
       nftMetadataReady: true,
       marketplaceReady: true
