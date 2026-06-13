@@ -1,4 +1,5 @@
 import { getReferenceGame } from "../data/referenceGames.js";
+import { runtimeSmokeTest } from "./gameSmokeTest.js";
 import { callZeroGChat, zeroGModels } from "./zeroGService.js";
 
 function buildPromptBundle({ gamePackage, request }) {
@@ -9,6 +10,9 @@ function buildPromptBundle({ gamePackage, request }) {
       "Output only executable JavaScript for src/main.js. Do not use markdown fences.",
       "Use vanilla Canvas 2D. Do not import Phaser, Three.js, React, or external libraries.",
       "Use the existing <canvas id=\"game\"> element and make keyboard plus pointer input work.",
+      "FILL THE SCREEN: the game runs in a tall, narrow portrait frame. Set canvas.width = window.innerWidth and canvas.height = window.innerHeight at startup AND on every 'resize' event — never hardcode 960x540 or any fixed size. Position and scale EVERYTHING (board, player, obstacles, HUD) relative to the current canvas.width/height so the playfield always fills the whole frame with no big empty margins. For a square board, make it as large as the smaller dimension allows and center it.",
+      "The game MUST be fully playable on a touch phone with no keyboard: handle touchstart/touchend (and pointer events) on the canvas so swipes steer/move and taps perform the main action; never make a physical key the ONLY way to play.",
+      "Restart MUST work by tapping or clicking the canvas after game over, in addition to any key (do not rely on 'Press R' alone).",
       "Import the game package with: import { gamePackage } from \"./gamePackage.js\";",
       "Import styles with: import \"./styles.css\";",
       "Do not use export statements anywhere in the module.",
@@ -202,11 +206,71 @@ async function generateWithModel(promptBundle, model, onProgress) {
   };
 }
 
+// Returns the first concrete problem with a module, or null when it runs clean.
+function moduleProblem(code, gamePackage) {
+  const syntaxError = findSyntaxError(code);
+  if (syntaxError) return `It has a JavaScript syntax error: ${syntaxError}`;
+  const smoke = runtimeSmokeTest(code, gamePackage);
+  if (!smoke.ok) return `It parses but crashes the moment it runs: ${smoke.error}`;
+  const missing = missingRuntimeFeatures(code);
+  if (missing.length > 0) return `It is missing required pieces: ${missing.join(", ")}`;
+  return null;
+}
+
+// A module is "hard broken" only if it definitely won't run for the player: a
+// syntax error, missing core runtime wiring, or a crash AS IT LOADS. A crash
+// that only appears while blindly stepping frames with no input is treated as
+// soft — for an edit we'd rather apply the change (with a warning) than revert
+// it, since such crashes are often false positives for input-driven games.
+function hardBrokenReason(code, gamePackage) {
+  const syntaxError = findSyntaxError(code);
+  if (syntaxError) return `JavaScript syntax error: ${syntaxError}`;
+  const missing = missingRuntimeFeatures(code);
+  if (missing.length > 0) return `missing required pieces: ${missing.join(", ")}`;
+  const smoke = runtimeSmokeTest(code, gamePackage);
+  if (!smoke.ok && smoke.phase === "load") return `crashes as it loads: ${smoke.error}`;
+  return null;
+}
+
+// Repairs an edited game module in place — NEVER regenerates from scratch.
+// Each attempt feeds the exact current error back to the agent and asks it to
+// fix ONLY that while keeping the existing gameplay and the creator's change.
+// Escalates to the stronger coding model after the first cheap attempt.
+async function repairEditedModule(code, promptBundle, gamePackage, onProgress, maxAttempts = 3) {
+  let current = code;
+  const usages = [];
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const hard = hardBrokenReason(current, gamePackage);
+    const problem = hard || moduleProblem(current, gamePackage);
+    if (!problem) return { code: current, ok: true, usage: sumUsage(usages) };
+    // Only a soft frame-step warning remains after a first try — stop here and
+    // let the caller ship the edit rather than burning more time/tokens.
+    if (!hard && attempt > 1) break;
+    const repair = await callCodingStage({
+      model: attempt === 1 ? zeroGModels.background : zeroGModels.coding,
+      maxTokens: 16384,
+      onChunk: (chars) => onProgress?.({ stage: "repairing", chars }),
+      system: [
+        promptBundle.system,
+        "Repair the game module below. KEEP all existing gameplay and the change the creator asked for — fix ONLY what is broken.",
+        "Return one complete executable src/main.js module, no markdown fences, no explanation.",
+        "Problem to fix: " + problem
+      ].join("\n"),
+      user: [promptBundle.user, "\nMODULE TO FIX (repair in place, keep its behavior):\n", current].join("\n")
+    });
+    usages.push(repair.usage);
+    current = stripModuleExports(stripMarkdownFence(repair.content));
+  }
+  return { code: current, ok: !moduleProblem(current, gamePackage), usage: sumUsage(usages) };
+}
+
 // Seed-and-edit: hand the agent a working reference module and ask it to modify
-// that, instead of writing from a blank page. Faster, cheaper, and far more reliable.
-// If the agent is unreachable or returns broken code, the reference ships unchanged.
-async function generateFromSeed(promptBundle, seedCode, model, onProgress) {
-  let integration = await callCodingStage({
+// that, instead of writing from a blank page. When the edit comes back broken,
+// it is REPAIRED in place (multiple attempts, keeping the creator's change) —
+// never regenerated from scratch. Only if repair cannot make it run does the
+// previous working build ship unchanged.
+async function generateFromSeed(promptBundle, seedCode, model, onProgress, gamePackage) {
+  const integration = await callCodingStage({
     model,
     maxTokens: 12000,
     onChunk: (chars) => onProgress?.({ stage: "editing-seed", chars }),
@@ -222,46 +286,40 @@ async function generateFromSeed(promptBundle, seedCode, model, onProgress) {
     user: [promptBundle.user, "\nREFERENCE MODULE (edit this, keep its structure):\n", seedCode].join("\n")
   });
   let generatedCode = stripModuleExports(stripMarkdownFence(integration.content));
-  let missing = missingRuntimeFeatures(generatedCode);
+  const usages = [integration.usage];
 
-  if (missing.length > 0) {
-    // Repair on the fast background model — keeps hybrid inside its time budget.
-    integration = await callCodingStage({
-      model: zeroGModels.background,
-      maxTokens: 12000,
-      onChunk: (chars) => onProgress?.({ stage: "repairing", chars }),
-      system: [
-        promptBundle.system,
-        "Repair the edited module so it runs as one complete src/main.js, not an explanation.",
-        "Keep your thinking/reasoning extremely brief and concise to save output tokens.",
-        "It must select document.querySelector(\"#game\"), obtain a 2D context, run requestAnimationFrame, handle pointer/touch and keyboard input, and support restart.",
-        "When unsure, keep the reference behavior. The previous output was missing: " + missing.join(", ") + "."
-      ].join("\n"),
-      user: [promptBundle.user, "\nEDITED MODULE:\n", generatedCode, "\nREFERENCE MODULE:\n", seedCode].join("\n")
-    });
-    generatedCode = stripModuleExports(stripMarkdownFence(integration.content));
-    missing = missingRuntimeFeatures(generatedCode);
+  // Repair in place if anything looks wrong — never regenerate from scratch.
+  if (moduleProblem(generatedCode, gamePackage)) {
+    const repaired = await repairEditedModule(generatedCode, promptBundle, gamePackage, onProgress, 3);
+    usages.push(repaired.usage);
+    // Keep the repaired code as long as it isn't WORSE than where we started.
+    if (!hardBrokenReason(repaired.code, gamePackage) || repaired.ok) generatedCode = repaired.code;
   }
 
-  if (missing.length > 0) {
-    // Agent could not produce a runnable edit — ship the working reference unchanged.
+  // Only revert to the previous build when the edit definitely won't run for
+  // the player (syntax / missing wiring / load-time crash). A soft frame-step
+  // warning still ships the edit so the creator's change isn't dropped.
+  const hardReason = hardBrokenReason(generatedCode, gamePackage);
+  if (hardReason) {
     return {
       provider: "reference",
       model: "reference-seed",
       generatedCode: seedCode,
-      usage: sumUsage([integration.usage]),
+      usage: sumUsage(usages),
       stages: { seedEdit: { model, usage: integration.usage } },
       source: "seed-fallback"
     };
   }
 
+  const soft = moduleProblem(generatedCode, gamePackage);
   return {
     provider: integration.provider,
     model: integration.model,
     generatedCode,
-    usage: sumUsage([integration.usage]),
+    usage: sumUsage(usages),
     stages: { seedEdit: { model: integration.model, usage: integration.usage } },
-    source: "seed-edit"
+    source: "seed-edit",
+    warning: soft ? "Edit applied — give it a quick test; if something misbehaves, describe the fix in chat." : null
   };
 }
 
@@ -331,6 +389,59 @@ async function ensureValidSyntax(generated, promptBundle, reference, onProgress)
   return generated;
 }
 
+// Parsing clean is not the same as running clean: code like `board[r][c] = x`
+// (where board[r] is undefined) crashes the instant it executes, showing the
+// player "Generated build failed to run…". Run the module in a mocked browser;
+// if it throws, repair it with the runtime error, then re-test. A seed-backed
+// game falls back to the working reference if the repair still crashes.
+async function ensureRuntimeRuns(generated, promptBundle, gamePackage, reference, onProgress) {
+  let result = runtimeSmokeTest(generated.generatedCode, gamePackage);
+  if (result.ok) return generated;
+
+  try {
+    const repair = await callCodingStage({
+      model: zeroGModels.background,
+      maxTokens: 16384,
+      onChunk: (chars) => onProgress?.({ stage: "fixing-runtime", chars }),
+      system: [
+        promptBundle.system,
+        "The module below PARSES but throws a runtime error the moment it runs, so the game shows a blank/error screen.",
+        "Find the cause and return the complete corrected module, nothing else — keep the gameplay the same.",
+        `Runtime error: ${result.error}`,
+        "Common causes: indexing into an array/object that was never initialised (e.g. board[r][c] before board[r] exists), reading a property of a variable that is still undefined, or using an element/context before it is assigned."
+      ].join("\n"),
+      user: [promptBundle.user, "\nBROKEN MODULE:\n", generated.generatedCode].join("\n")
+    });
+    const fixed = stripModuleExports(stripMarkdownFence(repair.content));
+    if (!findSyntaxError(fixed) && runtimeSmokeTest(fixed, gamePackage).ok) {
+      return {
+        ...generated,
+        generatedCode: fixed,
+        usage: sumUsage([generated.usage, repair.usage]),
+        stages: { ...generated.stages, runtimeRepair: { model: zeroGModels.background, usage: repair.usage } }
+      };
+    }
+    result = runtimeSmokeTest(fixed, gamePackage).ok ? { ok: true } : result;
+  } catch {
+    // repair call itself failed — fall through to the reference fallback
+  }
+
+  if (reference) {
+    return {
+      provider: "reference",
+      model: "reference-seed",
+      generatedCode: reference.code,
+      usage: generated.usage,
+      stages: generated.stages,
+      source: "seed-fallback",
+      warning: `Generated code crashed at runtime (${result.error}); shipped the working reference instead.`
+    };
+  }
+
+  generated.warning = `Generated code crashes at runtime: ${result.error}`;
+  return generated;
+}
+
 export async function createRefinementBundle(
   { gamePackage, request, refinementLevel, strategy, baseCode },
   { onProgress } = {}
@@ -351,7 +462,7 @@ export async function createRefinementBundle(
   let generated;
   if (reference && (baseCode || strategy !== "pure-agent")) {
     try {
-      generated = await generateFromSeed(promptBundle, reference.code, zeroGModels.coding, onProgress);
+      generated = await generateFromSeed(promptBundle, reference.code, zeroGModels.coding, onProgress, gamePackage);
     } catch (error) {
       // Agent unreachable — ship the working reference unchanged so the user still gets a game.
       generated = {
@@ -370,7 +481,13 @@ export async function createRefinementBundle(
   }
 
   if (generated.source !== "seed-fallback") {
-    generated = await ensureValidSyntax(generated, promptBundle, strategy !== "pure-agent" ? reference : null, onProgress);
+    const fallbackRef = strategy !== "pure-agent" ? reference : null;
+    generated = await ensureValidSyntax(generated, promptBundle, fallbackRef, onProgress);
+    // Syntax-clean code can still crash on its first run — verify it actually
+    // executes and repair/fall back if not.
+    if (generated.source !== "seed-fallback") {
+      generated = await ensureRuntimeRuns(generated, promptBundle, gamePackage, fallbackRef, onProgress);
+    }
   }
 
   const syntaxOk = !findSyntaxError(generated.generatedCode);

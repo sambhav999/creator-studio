@@ -7,10 +7,16 @@ import "./styles.css";
 
 const canvas = document.querySelector("#game");
 const ctx = canvas.getContext("2d");
-const WIDTH = 960;
-const HEIGHT = 540;
+// Fill the whole game frame (portrait on phones): WIDTH/HEIGHT track the
+// live canvas size so the playfield always fills the screen, no letterbox.
+let WIDTH = Math.max(240, Math.floor(window.innerWidth || 960));
+let HEIGHT = Math.max(240, Math.floor(window.innerHeight || 540));
 canvas.width = WIDTH;
 canvas.height = HEIGHT;
+window.addEventListener("resize", () => {
+  WIDTH = canvas.width = Math.max(240, Math.floor(window.innerWidth || 960));
+  HEIGHT = canvas.height = Math.max(240, Math.floor(window.innerHeight || 540));
+});
 
 const palette = gamePackage?.visuals?.colors ?? [];
 const tuning = gamePackage?.gameplay?.tuning ?? {};

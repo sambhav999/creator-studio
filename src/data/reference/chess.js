@@ -7,19 +7,59 @@ import "./styles.css";
 
 const canvas = document.querySelector("#game");
 const ctx = canvas.getContext("2d");
-const WIDTH = 960;
-const HEIGHT = 540;
-canvas.width = WIDTH;
-canvas.height = HEIGHT;
 
 const colors = gamePackage?.visuals?.colors ?? ["#ffd166", "#35e8ff", "#67ffb4"];
 const aiDelay = gamePackage?.gameplay?.tuning?.aiDelay ?? 0.45;
 
-const TILE = 50;
-const BOARD_X = 96;
-const BOARD_Y = 122;
 const VALUE = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
 const SOLID = { k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟" };
+
+// Responsive full-viewport layout: the canvas fills the whole game frame and
+// the board is scaled and centered. On wide screens the info panel sits to the
+// right of the board; on tall/mobile screens it sits below. Recomputed on
+// every resize so the game always fills the screen.
+let W = 960, H = 540;
+let TILE = 50, BOARD_X = 96, BOARD_Y = 122;
+let portrait = false, panelX = 132, panelY = 122, headerY = 40;
+
+function layout() {
+  W = canvas.width;
+  H = canvas.height;
+  portrait = H >= W;
+  if (portrait) {
+    // A square board on a tall screen is width-bound, so make it as wide as the
+    // frame allows (tiny side margin) and CENTER it vertically between a compact
+    // header and the info panel — fills the screen instead of leaving a big gap.
+    const header = Math.min(60, Math.max(42, H * 0.06));
+    const side = Math.max(4, W * 0.012);
+    const footer = Math.min(110, Math.max(70, H * 0.12));
+    const size = Math.max(160, Math.min(W - side * 2, H - header - footer));
+    TILE = Math.floor(size / 8);
+    const boardPx = TILE * 8;
+    const region = H - header - footer;
+    BOARD_X = Math.floor((W - boardPx) / 2);
+    BOARD_Y = Math.floor(header + Math.max(0, (region - boardPx) / 2));
+    panelX = BOARD_X;
+    panelY = BOARD_Y + boardPx + Math.min(26, H * 0.028);
+    headerY = header * 0.48;
+  } else {
+    const pad = Math.max(16, H * 0.06);
+    const size = Math.max(220, Math.min(H - pad * 2, W * 0.62));
+    TILE = Math.floor(size / 8);
+    const boardPx = TILE * 8;
+    BOARD_X = Math.floor(pad);
+    BOARD_Y = Math.floor((H - boardPx) / 2 + pad * 0.35);
+    panelX = BOARD_X + boardPx + Math.max(28, W * 0.03);
+    panelY = BOARD_Y;
+    headerY = Math.max(26, BOARD_Y - 34);
+  }
+}
+
+function resize() {
+  canvas.width = Math.max(300, Math.floor(window.innerWidth || 960));
+  canvas.height = Math.max(300, Math.floor(window.innerHeight || 540));
+  layout();
+}
 
 let board, turn, selected, legalForSelected, enPassant, castling, lastMove, capturedByWhite, capturedByBlack, aiTimer, over, message, score;
 
@@ -320,6 +360,7 @@ function handleClick(r, c) {
   if (p && p.color === "w") selectSquare(r, c);
 }
 
+resize();
 reset();
 
 function squareCenter(r, c) {
@@ -344,12 +385,40 @@ function drawPiece(piece, cx, cy) {
   ctx.fillText(g, cx, cy);
 }
 
+function drawPanel() {
+  if (portrait) {
+    text("Score " + Math.floor(score), panelX, panelY + 6, 16, colors[0], "left");
+    text(turn === "b" && !over ? "AI thinking…" : "Your move", W - panelX, panelY + 6, 16, "#ffd166", "right");
+    const cap = capturedByWhite.map((p) => SOLID[p.type]).join(" ");
+    ctx.font = "20px 'Apple Symbols','Segoe UI Symbol','Arial Unicode MS',system-ui,sans-serif";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = "#f4f6fb";
+    if (cap) ctx.fillText("Captured  " + cap, panelX, panelY + 34);
+    text("Tap a piece, then a square  ·  tap board to restart", W / 2, panelY + (cap ? 60 : 36), 12, "#7d8ba0", "center");
+  } else {
+    text("Score " + Math.floor(score), panelX, panelY + 4, 18, colors[0], "left");
+    text("You — White", panelX, panelY + 40, 18, "#eef6ff", "left");
+    text("AI — Black", panelX, panelY + 66, 18, "#91a4b8", "left");
+    text("Captured", panelX, panelY + 108, 14, "#7d8ba0", "left");
+    ctx.font = "24px 'Apple Symbols','Segoe UI Symbol','Arial Unicode MS',system-ui,sans-serif";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = "#f4f6fb";
+    ctx.fillText(capturedByWhite.map((p) => SOLID[p.type]).join(" ") || "—", panelX, panelY + 134);
+    ctx.fillStyle = "#11151d";
+    ctx.fillText(capturedByBlack.map((p) => SOLID[p.type]).join(" ") || "—", panelX, panelY + 162);
+    text(turn === "b" && !over ? "AI thinking…" : "Your move", panelX, panelY + 204, 16, colors[0], "left");
+    text("Click a piece, then a square", panelX, panelY + 234, 12, "#7d8ba0", "left");
+    text("R or click — new game", panelX, panelY + 256, 12, "#7d8ba0", "left");
+  }
+}
+
 function render() {
   ctx.fillStyle = "#070a12";
-  ctx.fillRect(0, 0, WIDTH, HEIGHT);
-  text(gamePackage?.title ?? "Chess", 28, 40, 24, "#eef6ff", "left");
-  text("Score " + Math.floor(score), 28, 78, 20, colors[0], "left");
-  if (!over) text(message, WIDTH / 2, 40, 18, "#ffd166", "center");
+  ctx.fillRect(0, 0, W, H);
+  text(gamePackage?.title ?? "Chess", BOARD_X, headerY, portrait ? 20 : 24, "#eef6ff", "left");
+  if (!over) text(message, W - BOARD_X, headerY, portrait ? 14 : 18, "#ffd166", "right");
 
   const checkedColor = inCheck(board, turn) ? turn : null;
   const checkedKing = checkedColor ? findKing(board, checkedColor) : null;
@@ -401,27 +470,15 @@ function render() {
   ctx.lineWidth = 2;
   ctx.strokeRect(BOARD_X, BOARD_Y, TILE * 8, TILE * 8);
 
-  const panelX = BOARD_X + TILE * 8 + 36;
-  text("You — White", panelX, BOARD_Y + 16, 18, "#eef6ff", "left");
-  text("AI — Black", panelX, BOARD_Y + 44, 18, "#91a4b8", "left");
-  text("Captured", panelX, BOARD_Y + 92, 14, "#7d8ba0", "left");
-  ctx.font = "24px 'Apple Symbols','Segoe UI Symbol','Arial Unicode MS',system-ui,sans-serif";
-  ctx.textAlign = "left";
-  ctx.fillStyle = "#f4f6fb";
-  ctx.fillText(capturedByWhite.map((p) => SOLID[p.type]).join(" ") || "—", panelX, BOARD_Y + 118);
-  ctx.fillStyle = "#11151d";
-  ctx.fillText(capturedByBlack.map((p) => SOLID[p.type]).join(" ") || "—", panelX, BOARD_Y + 150);
-  text(turn === "b" && !over ? "AI thinking…" : "Your move", panelX, BOARD_Y + 196, 16, colors[0], "left");
-  text("Click piece, then square", panelX, BOARD_Y + 228, 12, "#7d8ba0", "left");
-  text("R — new game", panelX, BOARD_Y + 250, 12, "#7d8ba0", "left");
+  drawPanel();
 
   if (over) {
     ctx.fillStyle = "rgba(7,10,18,0.72)";
-    ctx.fillRect(0, 0, WIDTH, HEIGHT);
+    ctx.fillRect(0, 0, W, H);
     const win = message.indexOf("You win") !== -1;
-    text(win ? "Victory!" : "Game Over", WIDTH / 2, HEIGHT / 2 - 24, 42, win ? "#67ffb4" : "#eef6ff", "center");
-    text(message, WIDTH / 2, HEIGHT / 2 - 78, 22, "#ffd166", "center");
-    text("Press R or click to play again", WIDTH / 2, HEIGHT / 2 + 24, 20, "#91a4b8", "center");
+    text(message, W / 2, H / 2 - 78, 22, "#ffd166", "center");
+    text(win ? "Victory!" : "Game Over", W / 2, H / 2 - 24, 42, win ? "#67ffb4" : "#eef6ff", "center");
+    text("Press R or tap to play again", W / 2, H / 2 + 24, 20, "#91a4b8", "center");
   }
 }
 
@@ -440,8 +497,8 @@ requestAnimationFrame(frame);
 
 function pointTo(event) {
   const rect = canvas.getBoundingClientRect();
-  const px = ((event.clientX - rect.left) / rect.width) * WIDTH;
-  const py = ((event.clientY - rect.top) / rect.height) * HEIGHT;
+  const px = ((event.clientX - rect.left) / rect.width) * W;
+  const py = ((event.clientY - rect.top) / rect.height) * H;
   return { px, py };
 }
 function onPress(event) {
@@ -461,3 +518,4 @@ canvas.addEventListener("touchstart", onPress, { passive: false });
 window.addEventListener("keydown", (event) => {
   if (event.code === "KeyR") reset();
 });
+window.addEventListener("resize", resize);
