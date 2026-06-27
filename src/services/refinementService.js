@@ -136,11 +136,11 @@ function missingRuntimeFeatures(code) {
   return checks.filter(([, pattern]) => !pattern.test(code)).map(([label]) => label);
 }
 
-// From-scratch generation is capped at ~10,000 characters of code: generation
+// From-scratch generation is capped at ~15,000 characters of code: generation
 // time scales linearly with output length, and the cap keeps a pure-agent
-// build inside a single response (no slow continuation round). 10K chars is
-// ~3K tokens; the 6144 ceiling leaves headroom without allowing 16K-token runs.
-const SCRATCH_CHAR_TARGET = 10000;
+// build inside a single response (no slow continuation round). 15K chars is
+// ~4.5K tokens; the 6144 ceiling leaves headroom without allowing 16K-token runs.
+const SCRATCH_CHAR_TARGET = 15000;
 const SCRATCH_MAX_TOKENS = 6144;
 
 async function generateWithModel(promptBundle, model, onProgress) {
