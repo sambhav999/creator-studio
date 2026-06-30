@@ -89,6 +89,7 @@ function setupHarness(game = {}) {
   const collections = {
     ledger: new MemoryCollection(),
     balances: new MemoryCollection(),
+    browserBalances: new MemoryCollection(),
     creators: new MemoryCollection(),
     players: new MemoryCollection(),
   };
@@ -119,6 +120,8 @@ test("awards likes idempotently to the creator and mirrors game points", async (
   assert.equal(collections.ledger.docs.length, 1);
   assert.equal(collections.balances.docs[0].userId, "creator-1");
   assert.equal(collections.balances.docs[0].lifetimePoints, POINT_VALUES.like);
+  assert.equal(collections.browserBalances.docs[0].walletAddress, "creator-1");
+  assert.equal(collections.browserBalances.docs[0].kultPoints, POINT_VALUES.like);
   assert.equal(collections.players.docs[0].walletAddress, "creator-1");
   assert.equal(collections.players.docs[0].kultPoints, POINT_VALUES.like);
 
@@ -166,6 +169,7 @@ test("awards shares and first-game bonus without double-paying", async () => {
 
   const summary = await getPointSummary("creator-1");
   assert.equal(summary.lifetimePoints, POINT_VALUES.share + POINT_VALUES.firstGameBonus);
+  assert.equal(collections.browserBalances.docs[0].kultPoints, POINT_VALUES.share + POINT_VALUES.firstGameBonus);
 });
 
 test("records unique creator published games separately from first-game bonus", async () => {

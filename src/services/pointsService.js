@@ -11,6 +11,7 @@ export const POINT_VALUES = Object.freeze({
 const DEFAULT_COLLECTIONS = Object.freeze({
   ledger: "kp_ledger",
   balances: "kp_balances",
+  browserBalances: "kult_points",
   creators: "creators",
   players: "store_players",
 });
@@ -90,6 +91,7 @@ async function collections() {
   const database = await getDatabaseByName(pointsDatabaseName());
   const ledger = database.collection(collectionName("ledger"));
   const balances = database.collection(collectionName("balances"));
+  const browserBalances = database.collection(collectionName("browserBalances"));
   const creators = database.collection(collectionName("creators"));
   const players = database.collection(collectionName("players"));
 
@@ -99,6 +101,8 @@ async function collections() {
       ledger.createIndex({ userId: 1, createdAt: -1 }, { name: "kp_ledger_user_createdAt" }),
       ledger.createIndex({ source: 1, type: 1, createdAt: -1 }, { name: "kp_ledger_source_type_createdAt" }),
       balances.createIndex({ userId: 1 }, { unique: true, name: "kp_balances_userId_unique" }),
+      browserBalances.createIndex({ walletAddress: 1 }, { unique: true, name: "kult_points_walletAddress_unique" }),
+      browserBalances.createIndex({ kultPoints: -1 }, { name: "kult_points_score_desc" }),
       creators.createIndex({ creatorId: 1 }, { unique: true, name: "creators_creatorId_unique" }),
     ]).then((results) => {
       for (const result of results) {
@@ -110,7 +114,7 @@ async function collections() {
   }
   await indexesReady;
 
-  return { ledger, balances, creators, players };
+  return { ledger, balances, browserBalances, creators, players };
 }
 
 export function buildPointEventId(type, parts) {
@@ -136,7 +140,7 @@ export async function awardKultPoints({
   const amount = Number.isFinite(points) ? points : eventAmount(type);
   if (amount <= 0) return { awarded: false, reason: "invalid-points" };
 
-  const { ledger, balances, creators, players } = await collections();
+  const { ledger, balances, browserBalances, creators, players } = await collections();
   const event = {
     eventId,
     source: "creator-studio",
@@ -167,6 +171,15 @@ export async function awardKultPoints({
       periodUpdates(amount, now),
       { upsert: true },
     ),
+    browserBalances.updateOne(
+      { walletAddress: normalizedUserId },
+      {
+        $inc: { kultPoints: amount },
+        $set: { walletAddress: normalizedUserId, updatedAt: now },
+        $setOnInsert: { createdAt: now },
+      },
+      { upsert: true },
+    ),
     // KULT Browser identifies players by walletAddress in the copied backend.
     // Updating this collection lets Creator Studio awards show up for Browser
     // users when both apps share the MongoDB server.
@@ -180,6 +193,10 @@ export async function awardKultPoints({
       { upsert: true },
     ),
   ]);
+  await ledger.updateOne(
+    { eventId },
+    { $set: { browserBalanceSyncedAt: now } },
+  );
 
   if (normalizedCreatorId) {
     await creators.updateOne(
