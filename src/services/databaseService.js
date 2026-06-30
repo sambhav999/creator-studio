@@ -1,4 +1,5 @@
 import { MongoClient } from "mongodb";
+import { putJsonOnZeroG } from "./zeroGStorage.js";
 
 let client;
 
@@ -28,8 +29,59 @@ export async function getGameCollection() {
   return database.collection(collectionName);
 }
 
+function assetManifestFor(gamePackage) {
+  const manifest = {
+    gameId: gamePackage.id,
+    title: gamePackage.title ?? null,
+    templateId: gamePackage.templateId ?? null,
+    thumbnailUrl: gamePackage.thumbnailUrl ?? null,
+    visuals: gamePackage.visuals ?? null,
+    assets: gamePackage.assets ?? gamePackage.visuals?.assets ?? null,
+    generatedAssets: gamePackage.refinement?.assets ?? gamePackage.generatedAssets ?? null,
+    buildAssets: gamePackage.build?.assets ?? null
+  };
+
+  const hasAssets = Boolean(
+    manifest.thumbnailUrl
+    || manifest.assets
+    || manifest.generatedAssets
+    || manifest.buildAssets
+    || manifest.visuals?.sprites
+    || manifest.visuals?.sounds
+    || manifest.visuals?.images
+  );
+
+  return hasAssets ? manifest : null;
+}
+
 export async function saveGamePackage(gamePackage) {
   const collection = await getGameCollection();
+  const zeroGStorage = await putJsonOnZeroG({
+    objectType: "game",
+    objectId: gamePackage.id,
+    data: {
+      ...gamePackage,
+      zeroGStorage: undefined
+    },
+    metadata: {
+      creatorId: gamePackage.creatorId ?? null,
+      title: gamePackage.title ?? null,
+      templateId: gamePackage.templateId ?? null
+    }
+  });
+  const assetManifest = assetManifestFor(gamePackage);
+  const assetZeroGStorage = assetManifest
+    ? await putJsonOnZeroG({
+      objectType: "game-assets",
+      objectId: gamePackage.id,
+      data: assetManifest,
+      metadata: {
+        gameId: gamePackage.id,
+        creatorId: gamePackage.creatorId ?? null,
+        title: gamePackage.title ?? null
+      }
+    })
+    : undefined;
   // Round-tripped packages can carry createdAt/_id from a previous read —
   // they must not collide with $setOnInsert / the immutable _id.
   const { _id, createdAt, ...fields } = gamePackage;
@@ -40,6 +92,8 @@ export async function saveGamePackage(gamePackage) {
     {
       $set: {
         ...fields,
+        zeroGStorage,
+        ...(assetZeroGStorage ? { assetZeroGStorage } : {}),
         updatedAt: new Date()
       },
       $setOnInsert: {

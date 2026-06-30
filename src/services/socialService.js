@@ -1,4 +1,5 @@
 import { getDatabase, getGameCollection } from "./databaseService.js";
+import { putJsonOnZeroG } from "./zeroGStorage.js";
 
 const COLLECTIONS = {
   likes: "social_likes",
@@ -389,7 +390,19 @@ export async function getCreatorStats(creatorId) {
       db.collection(COLLECTIONS.follows).countDocuments({ creatorId }),
     ]);
     const plays = ownGames.reduce((total, g) => total + (g.views ?? 0), 0);
-    return { creatorId, games: ownGames.length, plays, likes, followers };
+    const profile = { creatorId, games: ownGames.length, plays, likes, followers };
+    void putJsonOnZeroG({
+      objectType: "profile-snapshot",
+      objectId: creatorId,
+      data: {
+        ...profile,
+        snapshottedAt: new Date()
+      },
+      metadata: { creatorId }
+    }).catch((error) => {
+      console.warn("0G profile snapshot upload failed", { creatorId, message: error.message });
+    });
+    return profile;
   } catch {
     return { creatorId, games: 0, plays: 0, likes: 0, followers: 0 };
   }

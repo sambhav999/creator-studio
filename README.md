@@ -105,6 +105,14 @@ ZERO_G_IMAGE_MODEL=z-image
 ZERO_G_VISION_MODEL=qwen/qwen3-vl-30b-a3b-instruct
 ZERO_G_SPEECH_MODEL=openai/whisper-large-v3
 
+# 0G Storage SDK (optional, but required for real decentralized uploads)
+ZERO_G_STORAGE_ENABLED=true
+ZERO_G_STORAGE_INDEXER_RPC=https://indexer-storage-testnet-turbo.0g.ai
+ZERO_G_STORAGE_EVM_RPC=https://evmrpc-testnet.0g.ai
+ZERO_G_STORAGE_PRIVATE_KEY=
+ZERO_G_STORAGE_EXPECTED_REPLICA=1
+ZERO_G_STORAGE_COLLECTION=zero_g_storage_objects
+
 # Database (optional — persistence)
 MONGODB_URI=mongodb://localhost:27017/prompt_creator_studio
 MONGODB_COLLECTION=prompt_creator_studio
@@ -124,6 +132,8 @@ JWT_SECRET=change-this-local-secret
 ```
 
 `CORS_ORIGIN` can be a comma-separated list of allowed origins. `MONGODB_URI` can point at a local MongoDB database or an Atlas database. Generated game packages are saved to the collection configured by `MONGODB_COLLECTION`.
+
+0G Storage uploads are handled by `src/services/zeroGStorage.js` using the official `@0gfoundation/0g-storage-ts-sdk` flow from the 0G Storage SDK docs: `MemData` → `merkleTree()` → `Indexer.upload(file, evmRpc, signer)`. Game packages, thumbnails, leaderboard score records, and leaderboard snapshots are uploaded when `ZERO_G_STORAGE_INDEXER_RPC`, `ZERO_G_STORAGE_EVM_RPC`, and `ZERO_G_STORAGE_PRIVATE_KEY` are configured. MongoDB stores the searchable index in `ZERO_G_STORAGE_COLLECTION`, including `objectType`, `objectId`, `contentHash`, `rootHash`, `txHash`, `uri`, and upload `status`.
 
 ---
 

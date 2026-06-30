@@ -13,6 +13,7 @@ import { generateGameFromPrompt } from "../services/promptPipelineService.js";
 import { createRefinementBundle } from "../services/refinementService.js";
 import { generateAndStoreGameThumbnail } from "../services/thumbnailService.js";
 import { logActivity } from "../services/activityService.js";
+import { putBufferOnZeroG } from "../services/zeroGStorage.js";
 
 const createSchema = z.object({
   templateId: z.string().min(1),
@@ -140,6 +141,13 @@ export async function publishGame(request, response, next) {
       playPath: `/studio/play/${game.id}`
     };
     await updateGamePackageFields(game.id, { publish });
+    await logActivity({
+      userId: request.auth?.userId,
+      gameId: game.id,
+      gameTitle: game.title,
+      activityType: "publish",
+      details: `Published game "${game.title}"`
+    });
     response.json({
       ok: true,
       game: { ...game, publish },
@@ -169,6 +177,13 @@ export async function unpublishGame(request, response, next) {
       unpublishedAt: new Date()
     };
     await updateGamePackageFields(game.id, { publish });
+    await logActivity({
+      userId: request.auth?.userId,
+      gameId: game.id,
+      gameTitle: game.title,
+      activityType: "unpublish",
+      details: `Unpublished game "${game.title}"`
+    });
     response.json({ ok: true, game: { ...game, publish } });
   } catch (error) {
     next(error);
@@ -203,6 +218,13 @@ export async function saveGame(request, response, next) {
       }
     };
     const persistence = await saveGamePackage(gamePackage);
+    await logActivity({
+      userId: gamePackage.creatorId,
+      gameId: gamePackage.id,
+      gameTitle: gamePackage.title,
+      activityType: "major_edit",
+      details: `Saved changes to "${gamePackage.title || gamePackage.id}"`
+    });
     response.json({ ok: true, game: gamePackage, persistence });
   } catch (error) {
     next(error);
@@ -299,9 +321,25 @@ export async function exportGameCode(request, response, next) {
   try {
     const input = exportCodeSchema.parse(request.body);
     const { buffer, filename } = await buildGameCodeZip(input.gamePackage);
+    const zeroGStorage = await putBufferOnZeroG({
+      objectType: "game-export-zip",
+      objectId: input.gamePackage.id ?? filename,
+      buffer,
+      contentType: "application/zip",
+      fileName: filename,
+      metadata: {
+        gameId: input.gamePackage.id ?? null,
+        title: input.gamePackage.title ?? null,
+        creatorId: input.gamePackage.creatorId ?? null
+      }
+    });
 
     response.setHeader("Content-Type", "application/zip");
     response.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    response.setHeader("X-0G-Storage-Status", zeroGStorage.status);
+    if (zeroGStorage.rootHash) response.setHeader("X-0G-Root-Hash", zeroGStorage.rootHash);
+    if (zeroGStorage.txHash) response.setHeader("X-0G-Tx-Hash", zeroGStorage.txHash);
+    if (zeroGStorage.uri) response.setHeader("X-0G-URI", zeroGStorage.uri);
     response.send(buffer);
   } catch (error) {
     next(error);

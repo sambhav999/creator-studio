@@ -1,4 +1,5 @@
 import { getDatabase } from "./databaseService.js";
+import { putJsonOnZeroG } from "./zeroGStorage.js";
 
 const collectionName = "game_leaderboard_scores";
 const memoryScores = new Map();
@@ -61,26 +62,40 @@ export async function getLeaderboard(gameId, limit = 50) {
 }
 
 export async function submitScore({ gameId, userId, username, score }) {
+  const now = new Date();
   const entry = {
     gameId,
     userId,
     username,
     score,
-    updatedAt: new Date(),
+    updatedAt: now,
   };
   const collection = await getCollection();
 
   if (collection) {
+    const scoreStorage = await putJsonOnZeroG({
+      objectType: "leaderboard-score",
+      objectId: `${gameId}:${userId}`,
+      data: { ...entry, submittedAt: now },
+      metadata: { gameId, userId }
+    });
     await collection.updateOne(
       { gameId, userId },
       {
         $max: { score },
-        $set: { username, updatedAt: entry.updatedAt },
+        $set: { username, updatedAt: entry.updatedAt, zeroGStorage: scoreStorage },
         $setOnInsert: { gameId, userId, createdAt: new Date() },
       },
       { upsert: true },
     );
-    return getLeaderboard(gameId);
+    const leaderboard = await getLeaderboard(gameId);
+    const snapshotStorage = await putJsonOnZeroG({
+      objectType: "leaderboard-snapshot",
+      objectId: gameId,
+      data: leaderboard,
+      metadata: { gameId, limit: leaderboard.entries.length }
+    });
+    return { ...leaderboard, zeroGStorage: snapshotStorage };
   }
 
   const scores = memoryScores.get(gameId) ?? [];

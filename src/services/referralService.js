@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { nanoid } from "nanoid";
 import { getDatabase } from "./databaseService.js";
+import { logActivity } from "./activityService.js";
 
 const REFERRER_REWARD = 50;
 const REFERRED_REWARD = 100;
@@ -118,7 +119,7 @@ export async function trackReferralClick({ code, ip, userAgent }) {
   });
 }
 
-async function issueRewards(attribution) {
+async function issueRewards(attribution, gameId = attribution.qualifiedGameId ?? null) {
   const { attributions, ledger } = await collections();
   const attributionId = String(attribution._id);
   const now = new Date();
@@ -158,6 +159,20 @@ async function issueRewards(attribution) {
     { _id: attribution._id, status: { $ne: "rewarded" } },
     { $set: { status: "rewarded", rewardedAt: now } },
   );
+  await Promise.all([
+    logActivity({
+      userId: attribution.referrerId,
+      gameId,
+      activityType: "reward_claim",
+      details: `Referral reward claimed: ${REFERRER_REWARD} KP`
+    }),
+    logActivity({
+      userId: attribution.referredId,
+      gameId,
+      activityType: "reward_claim",
+      details: `Welcome referral reward claimed: ${REFERRED_REWARD} KP`
+    })
+  ]);
   return { status: "rewarded", referrerReward: REFERRER_REWARD, referredReward: REFERRED_REWARD };
 }
 
@@ -190,7 +205,7 @@ export async function qualifyReferral({ userId, gameId, durationSeconds }) {
     { _id: attribution._id, status: "pending" },
     { $set: { qualifiedAt: new Date(), qualifiedGameId: gameId } },
   );
-  return { qualified: true, ...(await issueRewards(attribution)) };
+  return { qualified: true, ...(await issueRewards(attribution, gameId)) };
 }
 
 export async function getReferralSummary(userId, origin) {

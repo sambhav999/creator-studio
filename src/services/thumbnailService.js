@@ -1,6 +1,7 @@
 import { getDatabase, getGameCollection } from "./databaseService.js";
 import { isSpacesConfigured, uploadPublicObject } from "./spacesStorageService.js";
 import { generateImageAsset } from "./zeroGService.js";
+import { putBufferOnZeroG } from "./zeroGStorage.js";
 
 const COLLECTION_NAME = "thumbnails";
 
@@ -11,6 +12,14 @@ export async function getThumbnailCollection() {
 
 export async function uploadThumbnail(templateId, buffer, contentType, fileName) {
   const collection = await getThumbnailCollection();
+  const zeroGStorage = await putBufferOnZeroG({
+    objectType: "thumbnail",
+    objectId: templateId,
+    buffer,
+    contentType,
+    fileName,
+    metadata: { templateId }
+  });
 
   // Primary store is DigitalOcean Spaces — Mongo keeps only the public URL.
   if (isSpacesConfigured()) {
@@ -18,7 +27,7 @@ export async function uploadThumbnail(templateId, buffer, contentType, fileName)
     await collection.updateOne(
       { templateId },
       {
-        $set: { templateId, url, contentType, fileName, updatedAt: new Date() },
+        $set: { templateId, url, contentType, fileName, zeroGStorage, updatedAt: new Date() },
         $unset: { data: "" },
         $setOnInsert: { createdAt: new Date() }
       },
@@ -31,12 +40,12 @@ export async function uploadThumbnail(templateId, buffer, contentType, fileName)
   await collection.updateOne(
     { templateId },
     {
-      $set: { templateId, data: buffer, contentType, fileName, updatedAt: new Date() },
+      $set: { templateId, data: buffer, contentType, fileName, zeroGStorage, updatedAt: new Date() },
       $setOnInsert: { createdAt: new Date() }
     },
     { upsert: true }
   );
-  return { templateId, contentType, fileName };
+  return { templateId, contentType, fileName, zeroGStorage };
 }
 
 export async function getThumbnail(templateId) {
@@ -102,6 +111,14 @@ export async function generateAndStoreGameThumbnail(game) {
   // Primary store: DigitalOcean Spaces — the public URL goes onto the game
   // record in MongoDB and the frontend renders it directly. Falls back to the
   // Mongo-served thumbnail when Spaces is unavailable.
+  const zeroGStorage = await putBufferOnZeroG({
+    objectType: "thumbnail",
+    objectId: game.id,
+    buffer,
+    contentType,
+    fileName: `${game.id}.png`,
+    metadata: { gameId: game.id, title: game.title ?? null, sourceModel: result.model ?? null }
+  });
   let thumbnailUrl;
   if (isSpacesConfigured()) {
     try {
@@ -122,8 +139,8 @@ export async function generateAndStoreGameThumbnail(game) {
   const games = await getGameCollection();
   await games.updateOne(
     { id: game.id },
-    { $set: { thumbnailUrl, thumbnailModel: result.model, updatedAt: new Date() } }
+    { $set: { thumbnailUrl, thumbnailModel: result.model, thumbnailZeroGStorage: zeroGStorage, updatedAt: new Date() } }
   );
 
-  return { gameId: game.id, thumbnailUrl, model: result.model, bytes: buffer.length };
+  return { gameId: game.id, thumbnailUrl, model: result.model, bytes: buffer.length, zeroGStorage };
 }

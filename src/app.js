@@ -15,6 +15,7 @@ import { referralAdminRouter, referralRouter } from "./routes/referralRoutes.js"
 import { getDatabaseConfig } from "./services/databaseService.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 import { getZeroGConfig } from "./services/zeroGService.js";
+import { getZeroGStorageConfig } from "./services/zeroGStorage.js";
 import { requestIp, trackReferralClick } from "./services/referralService.js";
 
 dotenv.config();
@@ -50,7 +51,8 @@ app.get("/", (_request, response) => {
       social: "/api/social"
     },
     database: getDatabaseConfig(),
-    agents: getZeroGConfig()
+    agents: getZeroGConfig(),
+    storage: getZeroGStorageConfig()
   });
 });
 
@@ -80,7 +82,8 @@ const setupRoutes = (prefix) => {
       service: "kult-creator-studio-api",
       strategy: "template-first-ai-optional",
       database: getDatabaseConfig(),
-      agents: getZeroGConfig()
+      agents: getZeroGConfig(),
+      storage: getZeroGStorageConfig()
     });
   });
 
