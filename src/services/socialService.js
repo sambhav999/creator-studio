@@ -1,5 +1,6 @@
-import { getDatabase, getGameCollection } from "./databaseService.js";
+import { getDatabase, getGameCollection, getGamePackageById } from "./databaseService.js";
 import { putJsonOnZeroG } from "./zeroGStorage.js";
+import { awardLike, awardQualifiedPlay, awardShare, getPointSummary } from "./pointsService.js";
 
 const COLLECTIONS = {
   likes: "social_likes",
@@ -45,7 +46,9 @@ export async function toggleLike(gameId, userId) {
     }
     await col.insertOne({ gameId, userId, createdAt: new Date() });
     const count = await col.countDocuments({ gameId });
-    return { liked: true, count };
+    const game = await getGamePackageById(gameId).catch(() => null);
+    const points = game ? await awardLike({ game, actorId: userId }).catch(() => null) : null;
+    return { liked: true, count, points };
   }
 
   // fallback
@@ -53,7 +56,12 @@ export async function toggleLike(gameId, userId) {
   const set = memoryStore.likes.get(gameId);
   const wasLiked = set.has(userId);
   wasLiked ? set.delete(userId) : set.add(userId);
-  return { liked: !wasLiked, count: set.size };
+  const result = { liked: !wasLiked, count: set.size };
+  if (result.liked) {
+    const game = await getGamePackageById(gameId).catch(() => null);
+    result.points = game ? await awardLike({ game, actorId: userId }).catch(() => null) : null;
+  }
+  return result;
 }
 
 export async function getLikeStatus(gameId, userId) {
@@ -222,11 +230,15 @@ export async function recordShare(gameId, userId, platform) {
   if (col) {
     await col.insertOne(share);
     const count = await col.countDocuments({ gameId });
-    return { shared: true, count };
+    const game = await getGamePackageById(gameId).catch(() => null);
+    const points = game ? await awardShare({ game, actorId: userId, platform }).catch(() => null) : null;
+    return { shared: true, count, points };
   }
 
   memoryStore.shares.set(gameId, (memoryStore.shares.get(gameId) ?? 0) + 1);
-  return { shared: true, count: memoryStore.shares.get(gameId) };
+  const game = await getGamePackageById(gameId).catch(() => null);
+  const points = game ? await awardShare({ game, actorId: userId, platform }).catch(() => null) : null;
+  return { shared: true, count: memoryStore.shares.get(gameId), points };
 }
 
 export async function getShareCount(gameId) {
@@ -295,6 +307,27 @@ export async function recordView(gameId, userId) {
   }
 
   return { gameId, views: count };
+}
+
+export async function recordQualifiedPlay(gameId, { userId, sessionId, durationSeconds }) {
+  if (Number(durationSeconds) < 30) {
+    return { qualified: false, reason: "duration", points: null };
+  }
+
+  const game = await getGamePackageById(gameId).catch(() => null);
+  if (!game) return { qualified: false, reason: "game-not-found", points: null };
+
+  const points = await awardQualifiedPlay({
+    game,
+    actorId: userId,
+    sessionId,
+    durationSeconds,
+  });
+
+  return {
+    qualified: Boolean(points.awarded || points.duplicate),
+    points,
+  };
 }
 
 export async function getViewCount(gameId) {
@@ -385,12 +418,24 @@ export async function getCreatorStats(creatorId) {
       .toArray();
     const gameIds = ownGames.map((g) => g.id);
     const db = await getDatabase();
-    const [likes, followers] = await Promise.all([
+    const [likes, followers, points] = await Promise.all([
       gameIds.length ? db.collection(COLLECTIONS.likes).countDocuments({ gameId: { $in: gameIds } }) : 0,
       db.collection(COLLECTIONS.follows).countDocuments({ creatorId }),
+      getPointSummary(creatorId),
     ]);
     const plays = ownGames.reduce((total, g) => total + (g.views ?? 0), 0);
-    const profile = { creatorId, games: ownGames.length, plays, likes, followers };
+    const profile = {
+      creatorId,
+      games: ownGames.length,
+      plays,
+      likes,
+      followers,
+      lifetimePoints: points?.lifetimePoints ?? 0,
+      dailyPoints: points?.dailyPoints ?? {},
+      weeklyPoints: points?.weeklyPoints ?? {},
+      currentDay: points?.currentDay ?? null,
+      currentWeek: points?.currentWeek ?? null,
+    };
     void putJsonOnZeroG({
       objectType: "profile-snapshot",
       objectId: creatorId,
@@ -404,7 +449,18 @@ export async function getCreatorStats(creatorId) {
     });
     return profile;
   } catch {
-    return { creatorId, games: 0, plays: 0, likes: 0, followers: 0 };
+    return {
+      creatorId,
+      games: 0,
+      plays: 0,
+      likes: 0,
+      followers: 0,
+      lifetimePoints: 0,
+      dailyPoints: {},
+      weeklyPoints: {},
+      currentDay: null,
+      currentWeek: null,
+    };
   }
 }
 

@@ -196,6 +196,23 @@ All routes are mounted at both `/api` and `/` prefixes (dual-mount in `app.js`).
 | `GET` | `/api/admin/referral/held` | List same-IP or velocity-held referrals |
 | `POST` | `/api/admin/referral/:id/approve` | Approve a held referral and issue both rewards |
 
+### KULT Points
+
+Creator Studio awards KULT Points through a shared, idempotent ledger in the `kult_browser` database on the same MongoDB server.
+
+| Event | KP |
+| :--- | ---: |
+| Qualified play (`>=30s`) | 1 |
+| Like | 3 |
+| Share / Moment | 10 |
+| Referral play | 5 |
+| First game publish bonus | 250 |
+
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `POST` | `/api/social/plays/:gameId/qualify` | Award qualified play KP after 30 seconds. Body: `userId`, `sessionId`, `durationSeconds` |
+| `GET` | `/api/social/points/:userId` | Return lifetime, daily, and weekly KULT Points summary |
+
 ---
 
 ## 🏗️ Architecture

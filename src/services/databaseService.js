@@ -24,6 +24,20 @@ export async function getDatabase() {
   return client.db();
 }
 
+export async function getMongoClient() {
+  if (!client) {
+    client = new MongoClient(getMongoUri());
+    await client.connect();
+  }
+
+  return client;
+}
+
+export async function getDatabaseByName(databaseName) {
+  const mongoClient = await getMongoClient();
+  return databaseName ? mongoClient.db(databaseName) : mongoClient.db();
+}
+
 export async function getGameCollection() {
   const database = await getDatabase();
   return database.collection(collectionName);

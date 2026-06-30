@@ -19,8 +19,10 @@ import {
   getShareCount,
   getSocialStats,
   getUserLikes,
+  recordQualifiedPlay,
 } from "../services/socialService.js";
 import { logActivity, getGameTitle, getUserActivities } from "../services/activityService.js";
+import { getPointSummary } from "../services/pointsService.js";
 
 // ─── Schemas ───────────────────────────────────────────────────────────────
 
@@ -265,6 +267,12 @@ const viewSchema = z.object({
   userId: z.string().optional(),
 });
 
+const qualifiedPlaySchema = z.object({
+  userId: z.string().min(1),
+  sessionId: z.string().min(1),
+  durationSeconds: z.coerce.number().positive(),
+});
+
 export async function handleRecordView(req, res, next) {
   try {
     const { gameId } = req.params;
@@ -279,6 +287,16 @@ export async function handleRecordView(req, res, next) {
 export async function handleGetViewCount(req, res, next) {
   try {
     res.json(await getViewCount(req.params.gameId));
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function handleRecordQualifiedPlay(req, res, next) {
+  try {
+    const input = qualifiedPlaySchema.parse(req.body ?? {});
+    const result = await recordQualifiedPlay(req.params.gameId, input);
+    res.status(result.qualified ? 201 : 202).json(result);
   } catch (error) {
     next(error);
   }
@@ -326,6 +344,23 @@ export async function handleGetCreatorStats(req, res, next) {
   }
 }
 
+export async function handleGetPointSummary(req, res, next) {
+  try {
+    const { userId } = userIdSchema.parse(req.params);
+    const summary = await getPointSummary(userId);
+    res.json({
+      userId,
+      lifetimePoints: summary?.lifetimePoints ?? 0,
+      dailyPoints: summary?.dailyPoints ?? {},
+      weeklyPoints: summary?.weeklyPoints ?? {},
+      currentDay: summary?.currentDay ?? null,
+      currentWeek: summary?.currentWeek ?? null,
+      updatedAt: summary?.updatedAt ?? null,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
 
 export async function handleGetTopViewed(req, res, next) {
   try {

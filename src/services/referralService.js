@@ -2,9 +2,8 @@ import { createHash } from "node:crypto";
 import { nanoid } from "nanoid";
 import { getDatabase } from "./databaseService.js";
 import { logActivity } from "./activityService.js";
+import { POINT_VALUES, awardReferralPlay } from "./pointsService.js";
 
-const REFERRER_REWARD = 50;
-const REFERRED_REWARD = 100;
 const VELOCITY_LIMIT = 10;
 const VELOCITY_WINDOW_MS = 60 * 60 * 1000;
 
@@ -27,7 +26,6 @@ async function collections() {
   const database = await getDatabase();
   const profiles = database.collection("referral_profiles");
   const attributions = database.collection("referral_attributions");
-  const ledger = database.collection("kp_ledger");
   const clicks = database.collection("referral_clicks");
 
   if (!indexesReady) {
@@ -37,13 +35,11 @@ async function collections() {
       attributions.createIndex({ referredId: 1 }, { unique: true }),
       attributions.createIndex({ code: 1, createdAt: -1 }),
       attributions.createIndex({ status: 1, createdAt: 1 }),
-      ledger.createIndex({ key: 1 }, { unique: true }),
-      ledger.createIndex({ userId: 1, createdAt: -1 }),
       clicks.createIndex({ code: 1, createdAt: -1 }),
     ]);
   }
   await indexesReady;
-  return { profiles, attributions, ledger, clicks };
+  return { profiles, attributions, clicks };
 }
 
 async function createUniqueCode(profiles) {
@@ -120,60 +116,28 @@ export async function trackReferralClick({ code, ip, userAgent }) {
 }
 
 async function issueRewards(attribution, gameId = attribution.qualifiedGameId ?? null) {
-  const { attributions, ledger } = await collections();
+  const { attributions } = await collections();
   const attributionId = String(attribution._id);
   const now = new Date();
 
-  await Promise.all([
-    ledger.updateOne(
-      { key: `ref:${attributionId}:referrer` },
-      {
-        $setOnInsert: {
-          key: `ref:${attributionId}:referrer`,
-          userId: attribution.referrerId,
-          amount: REFERRER_REWARD,
-          reason: "referral",
-          attributionId,
-          createdAt: now,
-        },
-      },
-      { upsert: true },
-    ),
-    ledger.updateOne(
-      { key: `ref:${attributionId}:welcome` },
-      {
-        $setOnInsert: {
-          key: `ref:${attributionId}:welcome`,
-          userId: attribution.referredId,
-          amount: REFERRED_REWARD,
-          reason: "referral_welcome",
-          attributionId,
-          createdAt: now,
-        },
-      },
-      { upsert: true },
-    ),
-  ]);
+  const points = await awardReferralPlay({
+    referrerId: attribution.referrerId,
+    referredId: attribution.referredId,
+    attributionId,
+    gameId,
+  });
 
   await attributions.updateOne(
     { _id: attribution._id, status: { $ne: "rewarded" } },
     { $set: { status: "rewarded", rewardedAt: now } },
   );
-  await Promise.all([
-    logActivity({
-      userId: attribution.referrerId,
-      gameId,
-      activityType: "reward_claim",
-      details: `Referral reward claimed: ${REFERRER_REWARD} KP`
-    }),
-    logActivity({
-      userId: attribution.referredId,
-      gameId,
-      activityType: "reward_claim",
-      details: `Welcome referral reward claimed: ${REFERRED_REWARD} KP`
-    })
-  ]);
-  return { status: "rewarded", referrerReward: REFERRER_REWARD, referredReward: REFERRED_REWARD };
+  await logActivity({
+    userId: attribution.referrerId,
+    gameId,
+    activityType: "reward_claim",
+    details: `Referral reward claimed: ${POINT_VALUES.referralPlay} KP`
+  });
+  return { status: "rewarded", referrerReward: POINT_VALUES.referralPlay, referredReward: 0, points };
 }
 
 export async function qualifyReferral({ userId, gameId, durationSeconds }) {
@@ -210,21 +174,13 @@ export async function qualifyReferral({ userId, gameId, durationSeconds }) {
 
 export async function getReferralSummary(userId, origin) {
   const { profile } = await ensureReferralProfile(userId);
-  const { attributions, ledger } = await collections();
-  const [count, earned] = await Promise.all([
-    attributions.countDocuments({ referrerId: userId, status: "rewarded" }),
-    ledger
-      .aggregate([
-        { $match: { userId, reason: "referral" } },
-        { $group: { _id: null, total: { $sum: "$amount" } } },
-      ])
-      .toArray(),
-  ]);
+  const { attributions } = await collections();
+  const count = await attributions.countDocuments({ referrerId: userId, status: "rewarded" });
   return {
     code: profile.code,
     link: `${origin.replace(/\/$/, "")}/r/${profile.code}`,
     count,
-    kpEarned: earned[0]?.total ?? 0,
+    kpEarned: count * POINT_VALUES.referralPlay,
   };
 }
 

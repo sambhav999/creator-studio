@@ -15,10 +15,12 @@ import {
   handleGetUserLikes,
   handleRecordView,
   handleGetViewCount,
+  handleRecordQualifiedPlay,
   handleToggleFollow,
   handleGetFollowStatus,
   handleGetFollowing,
   handleGetCreatorStats,
+  handleGetPointSummary,
   handleGetTopViewed,
 } from "../controllers/socialController.js";
 
@@ -53,6 +55,7 @@ socialRouter.get("/activity/user/:userId", handleGetUserActivities);
 socialRouter.get("/views-top", handleGetTopViewed);
 socialRouter.post("/views/:gameId", handleRecordView);
 socialRouter.get("/views/:gameId", handleGetViewCount);
+socialRouter.post("/plays/:gameId/qualify", handleRecordQualifiedPlay);
 
 // Follows
 socialRouter.post("/follows/toggle", handleToggleFollow);
@@ -61,3 +64,4 @@ socialRouter.get("/follows/:creatorId", handleGetFollowStatus);
 
 // Creator profile stats (real numbers)
 socialRouter.get("/creator-stats/:creatorId", handleGetCreatorStats);
+socialRouter.get("/points/:userId", handleGetPointSummary);

@@ -14,6 +14,7 @@ import { createRefinementBundle } from "../services/refinementService.js";
 import { generateAndStoreGameThumbnail } from "../services/thumbnailService.js";
 import { logActivity } from "../services/activityService.js";
 import { putBufferOnZeroG } from "../services/zeroGStorage.js";
+import { awardFirstGameBonus, recordCreatorGamePublished } from "../services/pointsService.js";
 
 const createSchema = z.object({
   templateId: z.string().min(1),
@@ -148,10 +149,19 @@ export async function publishGame(request, response, next) {
       activityType: "publish",
       details: `Published game "${game.title}"`
     });
+    await recordCreatorGamePublished({
+      creatorId: game.creatorId ?? request.auth?.userId,
+      gameId: game.id,
+    }).catch(() => null);
+    const points = await awardFirstGameBonus({
+      creatorId: game.creatorId ?? request.auth?.userId,
+      gameId: game.id,
+    }).catch(() => null);
     response.json({
       ok: true,
       game: { ...game, publish },
-      playPath: publish.playPath
+      playPath: publish.playPath,
+      points
     });
   } catch (error) {
     next(error);
