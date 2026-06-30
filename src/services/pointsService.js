@@ -29,7 +29,8 @@ function pointsDatabaseName() {
 }
 
 function normalizeUserId(userId) {
-  return String(userId || "").trim();
+  const value = String(userId || "").trim();
+  return /^0x/i.test(value) ? value.toLowerCase() : value;
 }
 
 function dayKey(date) {
@@ -93,14 +94,19 @@ async function collections() {
   const players = database.collection(collectionName("players"));
 
   if (!indexesReady) {
-    indexesReady = Promise.all([
-      ledger.createIndex({ eventId: 1 }, { unique: true }),
-      ledger.createIndex({ userId: 1, createdAt: -1 }),
-      ledger.createIndex({ source: 1, type: 1, createdAt: -1 }),
-      balances.createIndex({ userId: 1 }, { unique: true }),
-      creators.createIndex({ creatorId: 1 }, { unique: true }),
-      players.createIndex({ walletAddress: 1 }, { unique: true, sparse: true }),
-    ]);
+    indexesReady = Promise.allSettled([
+      ledger.createIndex({ eventId: 1 }, { unique: true, name: "kp_ledger_eventId_unique" }),
+      ledger.createIndex({ userId: 1, createdAt: -1 }, { name: "kp_ledger_user_createdAt" }),
+      ledger.createIndex({ source: 1, type: 1, createdAt: -1 }, { name: "kp_ledger_source_type_createdAt" }),
+      balances.createIndex({ userId: 1 }, { unique: true, name: "kp_balances_userId_unique" }),
+      creators.createIndex({ creatorId: 1 }, { unique: true, name: "creators_creatorId_unique" }),
+    ]).then((results) => {
+      for (const result of results) {
+        if (result.status === "rejected") {
+          console.warn("KULT Points index setup skipped", { message: result.reason?.message });
+        }
+      }
+    });
   }
   await indexesReady;
 
@@ -123,6 +129,8 @@ export async function awardKultPoints({
   now = new Date(),
 }) {
   const normalizedUserId = normalizeUserId(userId);
+  const normalizedCreatorId = normalizeUserId(creatorId ?? normalizedUserId);
+  const normalizedActorId = actorId ? normalizeUserId(actorId) : null;
   if (!normalizedUserId) return { awarded: false, reason: "missing-user" };
 
   const amount = Number.isFinite(points) ? points : eventAmount(type);
@@ -136,8 +144,8 @@ export async function awardKultPoints({
     userId: normalizedUserId,
     points: amount,
     gameId: gameId ?? null,
-    creatorId: creatorId ?? normalizedUserId,
-    actorId: actorId ?? null,
+    creatorId: normalizedCreatorId,
+    actorId: normalizedActorId,
     metadata,
     createdAt: now,
   };
@@ -173,9 +181,9 @@ export async function awardKultPoints({
     ),
   ]);
 
-  if (creatorId) {
+  if (normalizedCreatorId) {
     await creators.updateOne(
-      { creatorId },
+      { creatorId: normalizedCreatorId },
       periodUpdates(amount, now),
       { upsert: true },
     );
@@ -207,13 +215,14 @@ export async function awardQualifiedPlay({ game, actorId, sessionId, durationSec
     return { awarded: false, reason: "not-qualified" };
   }
   const eventId = buildPointEventId("play", [game.id, actorId, sessionId]);
+  const creatorId = normalizeUserId(game.creatorId);
   const result = await awardKultPoints({
     eventId,
-    userId: game.creatorId,
+    userId: creatorId,
     type: "game_play_qualified",
     points: POINT_VALUES.qualifiedPlay,
     gameId: game.id,
-    creatorId: game.creatorId,
+    creatorId,
     actorId,
     metadata: { durationSeconds, sessionId },
   });
@@ -225,13 +234,14 @@ export async function awardQualifiedPlay({ game, actorId, sessionId, durationSec
 
 export async function awardLike({ game, actorId }) {
   if (!game?.id || !game?.creatorId || !actorId) return { awarded: false, reason: "missing-input" };
+  const creatorId = normalizeUserId(game.creatorId);
   const result = await awardKultPoints({
     eventId: buildPointEventId("like", [game.id, actorId]),
-    userId: game.creatorId,
+    userId: creatorId,
     type: "game_like",
     points: POINT_VALUES.like,
     gameId: game.id,
-    creatorId: game.creatorId,
+    creatorId,
     actorId,
   });
   if (result.awarded) {
@@ -242,13 +252,14 @@ export async function awardLike({ game, actorId }) {
 
 export async function awardShare({ game, actorId, platform }) {
   if (!game?.id || !game?.creatorId || !actorId) return { awarded: false, reason: "missing-input" };
+  const creatorId = normalizeUserId(game.creatorId);
   const result = await awardKultPoints({
     eventId: buildPointEventId("share", [game.id, actorId, platform || "link"]),
-    userId: game.creatorId,
+    userId: creatorId,
     type: "game_share",
     points: POINT_VALUES.share,
     gameId: game.id,
-    creatorId: game.creatorId,
+    creatorId,
     actorId,
     metadata: { platform: platform || "link" },
   });
@@ -260,30 +271,32 @@ export async function awardShare({ game, actorId, platform }) {
 
 export async function awardFirstGameBonus({ creatorId, gameId }) {
   if (!creatorId || !gameId) return { awarded: false, reason: "missing-input" };
+  const normalizedCreatorId = normalizeUserId(creatorId);
   return awardKultPoints({
-    eventId: buildPointEventId("first-game-bonus", [creatorId]),
-    userId: creatorId,
+    eventId: buildPointEventId("first-game-bonus", [normalizedCreatorId]),
+    userId: normalizedCreatorId,
     type: "creator_first_game_bonus",
     points: POINT_VALUES.firstGameBonus,
     gameId,
-    creatorId,
+    creatorId: normalizedCreatorId,
   });
 }
 
 export async function recordCreatorGamePublished({ creatorId, gameId }) {
   if (!creatorId || !gameId) return { recorded: false, reason: "missing-input" };
   const { creators } = await collections();
+  const normalizedCreatorId = normalizeUserId(creatorId);
   const now = new Date();
-  const existing = await creators.findOne({ creatorId }, { projection: { _id: 0, publishedGameIds: 1 } });
+  const existing = await creators.findOne({ creatorId: normalizedCreatorId }, { projection: { _id: 0, publishedGameIds: 1 } });
   if (existing?.publishedGameIds?.includes(gameId)) return { recorded: false, duplicate: true, gameId };
 
   await creators.updateOne(
-    { creatorId },
+    { creatorId: normalizedCreatorId },
     {
       $addToSet: { publishedGameIds: gameId },
       $inc: { gamesCreated: 1 },
       $set: { lastPublishedGameId: gameId, updatedAt: now },
-      $setOnInsert: { creatorId, createdAt: now },
+      $setOnInsert: { creatorId: normalizedCreatorId, createdAt: now },
     },
     { upsert: true },
   );
@@ -292,13 +305,14 @@ export async function recordCreatorGamePublished({ creatorId, gameId }) {
 
 export async function awardReferralPlay({ referrerId, referredId, attributionId, gameId }) {
   if (!referrerId || !referredId || !attributionId) return { awarded: false, reason: "missing-input" };
+  const normalizedReferrerId = normalizeUserId(referrerId);
   return awardKultPoints({
-    eventId: buildPointEventId("referral-play", [attributionId, referrerId]),
-    userId: referrerId,
+    eventId: buildPointEventId("referral-play", [attributionId, normalizedReferrerId]),
+    userId: normalizedReferrerId,
     type: "referral_play",
     points: POINT_VALUES.referralPlay,
     gameId,
-    creatorId: referrerId,
+    creatorId: normalizedReferrerId,
     actorId: referredId,
     metadata: { attributionId },
   });
