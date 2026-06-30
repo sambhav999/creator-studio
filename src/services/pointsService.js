@@ -342,6 +342,67 @@ export async function getPointSummary(userId) {
   return balances.findOne({ userId: normalizedUserId }, { projection: { _id: 0 } });
 }
 
+export async function syncCreatorKpToBrowserBalances({ dryRun = false, batchSize = 500 } = {}) {
+  const { ledger, browserBalances } = await collections();
+  const now = new Date();
+  let processed = 0;
+  let synced = 0;
+  let skipped = 0;
+
+  while (true) {
+    const events = await ledger
+      .find({
+        source: "creator-studio",
+        browserBalanceSyncedAt: { $exists: false },
+        points: { $gt: 0 },
+      }, {
+        projection: { eventId: 1, userId: 1, points: 1, createdAt: 1 },
+        limit: batchSize,
+      })
+      .toArray();
+
+    if (!events.length) break;
+
+    for (const event of events) {
+      processed += 1;
+      const walletAddress = normalizeUserId(event.userId);
+      const points = Number(event.points);
+
+      if (!walletAddress || !Number.isFinite(points) || points <= 0) {
+        skipped += 1;
+        if (!dryRun) {
+          await ledger.updateOne(
+            { _id: event._id },
+            { $set: { browserBalanceSyncSkippedAt: now, browserBalanceSyncSkipReason: "invalid-event" } },
+          );
+        }
+        continue;
+      }
+
+      if (!dryRun) {
+        await browserBalances.updateOne(
+          { walletAddress },
+          {
+            $inc: { kultPoints: points },
+            $set: { walletAddress, updatedAt: now },
+            $setOnInsert: { createdAt: event.createdAt ?? now },
+          },
+          { upsert: true },
+        );
+        await ledger.updateOne(
+          { _id: event._id },
+          { $set: { browserBalanceSyncedAt: now } },
+        );
+      }
+      synced += 1;
+    }
+
+    if (dryRun) break;
+  }
+
+  return { dryRun, processed, synced, skipped };
+}
+
 export function __setPointsTestHarness(harness) {
   testHarness = harness;
   indexesReady = null;

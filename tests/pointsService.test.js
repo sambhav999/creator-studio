@@ -10,6 +10,7 @@ import {
   awardShare,
   getPointSummary,
   recordCreatorGamePublished,
+  syncCreatorKpToBrowserBalances,
 } from "../src/services/pointsService.js";
 
 function getByPath(object, path) {
@@ -28,11 +29,17 @@ function setByPath(object, path, value) {
 
 function matches(doc, filter) {
   return Object.entries(filter).every(([key, value]) => {
+    const current = getByPath(doc, key);
     if (value && typeof value === "object" && "$ne" in value) {
-      const current = getByPath(doc, key);
       return Array.isArray(current) ? !current.includes(value.$ne) : current !== value.$ne;
     }
-    return getByPath(doc, key) === value;
+    if (value && typeof value === "object" && "$exists" in value) {
+      return value.$exists ? current !== undefined : current === undefined;
+    }
+    if (value && typeof value === "object" && "$gt" in value) {
+      return current > value.$gt;
+    }
+    return current === value;
   });
 }
 
@@ -55,6 +62,20 @@ class MemoryCollection {
     const copy = clone(doc);
     if (options.projection?._id === 0) delete copy._id;
     return copy;
+  }
+
+  find(filter, options = {}) {
+    const docs = this.docs
+      .filter((item) => matches(item, filter))
+      .slice(0, options.limit ?? undefined)
+      .map((doc) => {
+        const copy = clone(doc);
+        if (options.projection?._id === 0) delete copy._id;
+        return copy;
+      });
+    return {
+      toArray: async () => docs,
+    };
   }
 
   async updateOne(filter, update, options = {}) {
@@ -210,4 +231,33 @@ test("awards referral play to the referrer using V1 KP value", async () => {
   assert.equal(duplicate.awarded, false);
   assert.equal(collections.ledger.docs.length, 1);
   assert.equal(collections.balances.docs[0].lifetimePoints, POINT_VALUES.referralPlay);
+});
+
+test("syncs unsynced ledger rows into Browser KULT points balances", async () => {
+  const { collections } = setupHarness();
+  collections.ledger.docs.push(
+    {
+      _id: "ledger-1",
+      eventId: "event-1",
+      source: "creator-studio",
+      userId: "0xABC",
+      points: 10,
+      createdAt: "2026-06-30T00:00:00.000Z",
+    },
+    {
+      _id: "ledger-2",
+      eventId: "event-2",
+      source: "creator-studio",
+      userId: "0xABC",
+      points: 5,
+      browserBalanceSyncedAt: "2026-06-30T00:00:00.000Z",
+    },
+  );
+
+  const result = await syncCreatorKpToBrowserBalances();
+
+  assert.deepEqual(result, { dryRun: false, processed: 1, synced: 1, skipped: 0 });
+  assert.equal(collections.browserBalances.docs[0].walletAddress, "0xabc");
+  assert.equal(collections.browserBalances.docs[0].kultPoints, 10);
+  assert.ok(collections.ledger.docs[0].browserBalanceSyncedAt);
 });
