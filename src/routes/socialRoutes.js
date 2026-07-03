@@ -22,6 +22,10 @@ import {
   handleGetCreatorStats,
   handleGetPointSummary,
   handleGetTopViewed,
+  handleGetDailyChallenges,
+  handleGetAchievements,
+  handleGetNotifications,
+  handleMarkNotificationsRead,
 } from "../controllers/socialController.js";
 
 export const socialRouter = Router();
@@ -65,3 +69,7 @@ socialRouter.get("/follows/:creatorId", handleGetFollowStatus);
 // Creator profile stats (real numbers)
 socialRouter.get("/creator-stats/:creatorId", handleGetCreatorStats);
 socialRouter.get("/points/:userId", handleGetPointSummary);
+socialRouter.get("/daily-challenges/:userId", handleGetDailyChallenges);
+socialRouter.get("/achievements/:userId", handleGetAchievements);
+socialRouter.get("/notifications/:userId", handleGetNotifications);
+socialRouter.post("/notifications/:userId/read", handleMarkNotificationsRead);

@@ -20,6 +20,10 @@ import {
   getSocialStats,
   getUserLikes,
   recordQualifiedPlay,
+  getDailyChallenges,
+  getAchievements,
+  getNotifications,
+  markNotificationsRead,
 } from "../services/socialService.js";
 import { logActivity, getGameTitle, getUserActivities } from "../services/activityService.js";
 import { getPointSummary } from "../services/pointsService.js";
@@ -28,34 +32,34 @@ import { getPointSummary } from "../services/pointsService.js";
 
 const gameIdSchema = z.object({
   gameId: z.string().min(1),
-});
+}).strict();
 
 const userIdSchema = z.object({
   userId: z.string().min(1),
-});
+}).strict();
 
 const likeSchema = gameIdSchema.merge(userIdSchema);
 
 const commentCreateSchema = gameIdSchema.merge(userIdSchema).extend({
   username: z.string().min(1).max(50),
   text: z.string().min(1).max(2000),
-});
+}).strict();
 
 const commentDeleteSchema = z.object({
   commentId: z.string().min(1),
   userId: z.string().min(1),
-});
+}).strict();
 
 const favoriteSchema = gameIdSchema.merge(userIdSchema);
 
 const shareSchema = gameIdSchema.merge(userIdSchema).extend({
   platform: z.enum(["link", "twitter", "discord", "telegram", "whatsapp", "embed", "instagram", "email"]).optional(),
-});
+}).strict();
 
 const paginationSchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
-});
+}).strict();
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  LIKES
@@ -131,7 +135,7 @@ export async function handleGetComments(req, res, next) {
 
 export async function handleDeleteComment(req, res, next) {
   try {
-    const { commentId } = z.object({ commentId: z.string().min(1) }).parse(req.params);
+    const { commentId } = z.object({ commentId: z.string().min(1) }).strict().parse(req.params);
     const { userId } = userIdSchema.parse(req.body);
     const result = await deleteComment(commentId, userId);
     if (!result.deleted) {
@@ -265,13 +269,13 @@ export async function handleGetUserLikes(req, res, next) {
 
 const viewSchema = z.object({
   userId: z.string().optional(),
-});
+}).strict();
 
 const qualifiedPlaySchema = z.object({
   userId: z.string().min(1),
   sessionId: z.string().min(1),
   durationSeconds: z.coerce.number().positive(),
-});
+}).strict();
 
 export async function handleRecordView(req, res, next) {
   try {
@@ -305,7 +309,7 @@ export async function handleRecordQualifiedPlay(req, res, next) {
 const followSchema = z.object({
   creatorId: z.string().min(1),
   userId: z.string().min(1),
-});
+}).strict();
 
 export async function handleToggleFollow(req, res, next) {
   try {
@@ -367,6 +371,48 @@ export async function handleGetTopViewed(req, res, next) {
   try {
     const limit = Math.min(Number(req.query.limit) || 100, 500);
     res.json({ games: await getTopViewed(limit) });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function handleGetDailyChallenges(req, res, next) {
+  try {
+    const { userId } = userIdSchema.parse(req.params);
+    res.json(await getDailyChallenges(userId));
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function handleGetAchievements(req, res, next) {
+  try {
+    const { userId } = userIdSchema.parse(req.params);
+    res.json(await getAchievements(userId));
+  } catch (error) {
+    next(error);
+  }
+}
+
+const notificationQuerySchema = z.object({
+  unreadOnly: z.coerce.boolean().optional().default(false),
+  limit: z.coerce.number().int().min(1).max(100).optional().default(50),
+}).strict();
+
+export async function handleGetNotifications(req, res, next) {
+  try {
+    const { userId } = userIdSchema.parse(req.params);
+    const query = notificationQuerySchema.parse(req.query);
+    res.json(await getNotifications(userId, query));
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function handleMarkNotificationsRead(req, res, next) {
+  try {
+    const { userId } = userIdSchema.parse(req.params);
+    res.json(await markNotificationsRead(userId));
   } catch (error) {
     next(error);
   }

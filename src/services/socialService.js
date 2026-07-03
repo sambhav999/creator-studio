@@ -9,6 +9,7 @@ const COLLECTIONS = {
   shares: "social_shares",
   views: "social_views",
   follows: "social_follows",
+  notifications: "social_notifications",
 };
 
 // ─── In-memory fallback when MongoDB is unavailable ────────────────────────
@@ -19,7 +20,51 @@ const memoryStore = {
   shares: new Map(),      // gameId → count
   views: new Map(),       // gameId → count
   follows: new Map(),     // creatorId → Set<followerId>
+  notifications: new Map(), // userId → Array<notification>
 };
+
+function dayKey(date = new Date()) {
+  return date.toISOString().slice(0, 10);
+}
+
+function weekKey(date = new Date()) {
+  const utc = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+  const day = new Date(utc).getUTCDay() || 7;
+  const thursday = new Date(utc);
+  thursday.setUTCDate(thursday.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(thursday.getUTCFullYear(), 0, 1));
+  const week = Math.ceil((((thursday - yearStart) / 86400000) + 1) / 7);
+  return `${thursday.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
+}
+
+function creatorScore({ games = 0, plays = 0, likes = 0, shares = 0, remixes = 0, followers = 0, featured = 0 }) {
+  return (games * 25) + Math.floor(plays / 5) + (likes * 5) + (shares * 10) + (remixes * 15) + (followers * 20) + (featured * 100);
+}
+
+async function notifyUser({ userId, type, title, body, gameId = null, actorId = null, metadata = {} }) {
+  if (!userId) return null;
+  const notification = {
+    userId,
+    type,
+    title,
+    body,
+    gameId,
+    actorId,
+    metadata,
+    read: false,
+    createdAt: new Date(),
+  };
+  const col = await getCollection(COLLECTIONS.notifications);
+  if (col) {
+    const result = await col.insertOne(notification);
+    return { ...notification, _id: result.insertedId };
+  }
+  const list = memoryStore.notifications.get(userId) ?? [];
+  const stored = { ...notification, _id: `mem_${Date.now()}_${Math.random().toString(36).slice(2, 8)}` };
+  list.unshift(stored);
+  memoryStore.notifications.set(userId, list);
+  return stored;
+}
 
 async function getCollection(name) {
   try {
@@ -48,6 +93,16 @@ export async function toggleLike(gameId, userId) {
     const count = await col.countDocuments({ gameId });
     const game = await getGamePackageById(gameId).catch(() => null);
     const points = game ? await awardLike({ game, actorId: userId }).catch(() => null) : null;
+    if (game?.creatorId && game.creatorId !== userId) {
+      void notifyUser({
+        userId: game.creatorId,
+        type: "like",
+        title: "Someone liked your game",
+        body: `"${game.title || "Your game"}" got a new like.`,
+        gameId,
+        actorId: userId,
+      }).catch(() => null);
+    }
     return { liked: true, count, points };
   }
 
@@ -60,6 +115,16 @@ export async function toggleLike(gameId, userId) {
   if (result.liked) {
     const game = await getGamePackageById(gameId).catch(() => null);
     result.points = game ? await awardLike({ game, actorId: userId }).catch(() => null) : null;
+    if (game?.creatorId && game.creatorId !== userId) {
+      void notifyUser({
+        userId: game.creatorId,
+        type: "like",
+        title: "Someone liked your game",
+        body: `"${game.title || "Your game"}" got a new like.`,
+        gameId,
+        actorId: userId,
+      }).catch(() => null);
+    }
   }
   return result;
 }
@@ -232,12 +297,32 @@ export async function recordShare(gameId, userId, platform) {
     const count = await col.countDocuments({ gameId });
     const game = await getGamePackageById(gameId).catch(() => null);
     const points = game ? await awardShare({ game, actorId: userId, platform }).catch(() => null) : null;
+    if (game?.creatorId && game.creatorId !== userId) {
+      void notifyUser({
+        userId: game.creatorId,
+        type: "share",
+        title: "Your game was shared",
+        body: `"${game.title || "Your game"}" was shared via ${platform || "link"}.`,
+        gameId,
+        actorId: userId,
+      }).catch(() => null);
+    }
     return { shared: true, count, points };
   }
 
   memoryStore.shares.set(gameId, (memoryStore.shares.get(gameId) ?? 0) + 1);
   const game = await getGamePackageById(gameId).catch(() => null);
   const points = game ? await awardShare({ game, actorId: userId, platform }).catch(() => null) : null;
+  if (game?.creatorId && game.creatorId !== userId) {
+    void notifyUser({
+      userId: game.creatorId,
+      type: "share",
+      title: "Your game was shared",
+      body: `"${game.title || "Your game"}" was shared via ${platform || "link"}.`,
+      gameId,
+      actorId: userId,
+    }).catch(() => null);
+  }
   return { shared: true, count: memoryStore.shares.get(gameId), points };
 }
 
@@ -323,6 +408,16 @@ export async function recordQualifiedPlay(gameId, { userId, sessionId, durationS
     sessionId,
     durationSeconds,
   });
+  if ((points.awarded || points.duplicate) && game.creatorId && game.creatorId !== userId) {
+    void notifyUser({
+      userId: game.creatorId,
+      type: "play",
+      title: "Someone played your game",
+      body: `"${game.title || "Your game"}" got a qualified play.`,
+      gameId,
+      actorId: userId,
+    }).catch(() => null);
+  }
 
   return {
     qualified: Boolean(points.awarded || points.duplicate),
@@ -367,6 +462,13 @@ export async function toggleFollow(creatorId, followerId) {
       await col.deleteOne({ _id: existing._id });
     } else {
       await col.insertOne({ creatorId, followerId, createdAt: new Date() });
+      void notifyUser({
+        userId: creatorId,
+        type: "follow",
+        title: "New follower",
+        body: "Someone followed your creator profile.",
+        actorId: followerId,
+      }).catch(() => null);
     }
     const followers = await col.countDocuments({ creatorId });
     const points = !existing
@@ -383,6 +485,15 @@ export async function toggleFollow(creatorId, followerId) {
   const points = following
     ? await awardFollowCreator({ creatorId, followerId }).catch(() => null)
     : null;
+  if (following) {
+    void notifyUser({
+      userId: creatorId,
+      type: "follow",
+      title: "New follower",
+      body: "Someone followed your creator profile.",
+      actorId: followerId,
+    }).catch(() => null);
+  }
   return { creatorId, following, followers: set.size, points };
 }
 
@@ -424,27 +535,34 @@ export async function getCreatorStats(creatorId) {
       .toArray();
     const gameIds = ownGames.map((g) => g.id);
     const db = await getDatabase();
-    const [likes, followers, creatorScore] = await Promise.all([
+    const [likes, followers, shares, remixes, featured, points] = await Promise.all([
       gameIds.length ? db.collection(COLLECTIONS.likes).countDocuments({ gameId: { $in: gameIds } }) : 0,
       db.collection(COLLECTIONS.follows).countDocuments({ creatorId }),
+      gameIds.length ? db.collection(COLLECTIONS.shares).countDocuments({ gameId: { $in: gameIds } }) : 0,
+      gameIds.length ? games.countDocuments({ remixOf: { $in: gameIds } }) : 0,
+      games.countDocuments({ creatorId, "browserFeature.featured": true }),
       getCreatorScoreSummary(creatorId),
     ]);
     const plays = ownGames.reduce((total, g) => total + (g.views ?? 0), 0);
+    const score = creatorScore({ games: ownGames.length, plays, likes, shares, remixes, followers, featured });
     const profile = {
       creatorId,
       games: ownGames.length,
       plays,
       likes,
+      shares,
+      remixes,
       followers,
-      creatorScore: creatorScore?.lifetimeScore ?? creatorScore?.lifetimePoints ?? 0,
-      lifetimeScore: creatorScore?.lifetimeScore ?? creatorScore?.lifetimePoints ?? 0,
-      dailyScore: creatorScore?.dailyScore ?? creatorScore?.dailyPoints ?? {},
-      weeklyScore: creatorScore?.weeklyScore ?? creatorScore?.weeklyPoints ?? {},
-      lifetimePoints: creatorScore?.lifetimePoints ?? creatorScore?.lifetimeScore ?? 0,
-      dailyPoints: creatorScore?.dailyPoints ?? creatorScore?.dailyScore ?? {},
-      weeklyPoints: creatorScore?.weeklyPoints ?? creatorScore?.weeklyScore ?? {},
-      currentDay: creatorScore?.currentDay ?? null,
-      currentWeek: creatorScore?.currentWeek ?? null,
+      featured,
+      creatorScore: points?.lifetimeScore ?? points?.lifetimePoints ?? score,
+      lifetimeScore: points?.lifetimeScore ?? points?.lifetimePoints ?? score,
+      dailyScore: points?.dailyScore ?? points?.dailyPoints ?? {},
+      weeklyScore: points?.weeklyScore ?? points?.weeklyPoints ?? {},
+      lifetimePoints: points?.lifetimePoints ?? 0,
+      dailyPoints: points?.dailyPoints ?? points?.dailyScore ?? {},
+      weeklyPoints: points?.weeklyPoints ?? points?.weeklyScore ?? {},
+      currentDay: points?.currentDay ?? null,
+      currentWeek: points?.currentWeek ?? null,
     };
     void putJsonOnZeroG({
       objectType: "profile-snapshot",
@@ -464,7 +582,10 @@ export async function getCreatorStats(creatorId) {
       games: 0,
       plays: 0,
       likes: 0,
+      shares: 0,
+      remixes: 0,
       followers: 0,
+      featured: 0,
       creatorScore: 0,
       lifetimeScore: 0,
       dailyScore: {},
@@ -496,4 +617,121 @@ export async function getUserLikes(userId, page = 1, limit = 20) {
     if (set.has(userId)) results.push({ gameId, userId });
   }
   return { likes: results.slice(skip, skip + limit), count: results.length, page, limit };
+}
+
+export async function getNotifications(userId, { unreadOnly = false, limit = 50 } = {}) {
+  const col = await getCollection(COLLECTIONS.notifications);
+  if (col) {
+    const filter = { userId, ...(unreadOnly ? { read: false } : {}) };
+    const notifications = await col
+      .find(filter, { projection: { _id: 0 } })
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .toArray();
+    return { userId, notifications };
+  }
+  const notifications = (memoryStore.notifications.get(userId) ?? [])
+    .filter((item) => !unreadOnly || !item.read)
+    .slice(0, limit);
+  return { userId, notifications };
+}
+
+export async function markNotificationsRead(userId) {
+  const col = await getCollection(COLLECTIONS.notifications);
+  if (col) {
+    const result = await col.updateMany({ userId, read: false }, { $set: { read: true, readAt: new Date() } });
+    return { userId, updated: result.modifiedCount ?? 0 };
+  }
+  const list = memoryStore.notifications.get(userId) ?? [];
+  let updated = 0;
+  for (const item of list) {
+    if (!item.read) {
+      item.read = true;
+      item.readAt = new Date();
+      updated += 1;
+    }
+  }
+  return { userId, updated };
+}
+
+async function getFollowerIds(creatorId) {
+  const col = await getCollection(COLLECTIONS.follows);
+  if (col) {
+    const docs = await col.find({ creatorId }, { projection: { _id: 0, followerId: 1 } }).toArray();
+    return docs.map((doc) => doc.followerId).filter(Boolean);
+  }
+  return [...(memoryStore.follows.get(creatorId) ?? [])];
+}
+
+export async function notifyFollowersOfPublish(game) {
+  if (!game?.creatorId || !game?.id) return { notified: 0 };
+  const followers = await getFollowerIds(game.creatorId);
+  await Promise.all(followers.map((followerId) => notifyUser({
+    userId: followerId,
+    type: "creator_publish",
+    title: "A creator you follow published",
+    body: `"${game.title || "New game"}" is ready to play.`,
+    gameId: game.id,
+    actorId: game.creatorId,
+  }).catch(() => null)));
+  return { notified: followers.length };
+}
+
+export async function getDailyChallenges(userId) {
+  const today = dayKey();
+  const stats = await getCreatorStats(userId);
+  const points = await getPointSummary(userId).catch(() => null);
+  const dailyPoints = Number(points?.dailyPoints?.[today] ?? 0);
+  const challenges = [
+    {
+      id: `${today}:play-3`,
+      title: "Play 3 games",
+      metric: "dailyKP",
+      target: 3,
+      progress: Math.min(3, dailyPoints),
+      reward: "15 KP",
+    },
+    {
+      id: `${today}:publish-1`,
+      title: "Publish 1 game",
+      metric: "publishedGames",
+      target: 1,
+      progress: Math.min(1, stats.games),
+      reward: "Creator Score boost",
+    },
+    {
+      id: `${today}:share-1`,
+      title: "Earn 1 share",
+      metric: "shares",
+      target: 1,
+      progress: Math.min(1, stats.shares),
+      reward: "10 KP",
+    },
+  ].map((challenge) => ({
+    ...challenge,
+    completed: challenge.progress >= challenge.target,
+  }));
+  return { userId, date: today, week: weekKey(), challenges };
+}
+
+export async function getAchievements(userId) {
+  const stats = await getCreatorStats(userId);
+  const points = await getPointSummary(userId).catch(() => null);
+  const lifetimePoints = Number(points?.lifetimePoints ?? 0);
+  const achievements = [
+    { id: "first-publish", title: "First Publish", description: "Publish your first game.", unlocked: stats.games >= 1 },
+    { id: "crowd-spark", title: "Crowd Spark", description: "Reach 10 total likes.", unlocked: stats.likes >= 10 },
+    { id: "playmaker", title: "Playmaker", description: "Reach 100 total plays.", unlocked: stats.plays >= 100 },
+    { id: "rising-creator", title: "Rising Creator", description: "Reach 500 Creator Score.", unlocked: stats.creatorScore >= 500 },
+    { id: "kp-collector", title: "KP Collector", description: "Earn 250 KP.", unlocked: lifetimePoints >= 250 },
+    { id: "genesis-founder", title: "Genesis Founder", description: "Early KULT creator identity badge.", unlocked: stats.games > 0 || lifetimePoints > 0 },
+  ];
+  return {
+    userId,
+    inventory: {
+      badges: achievements.filter((item) => item.unlocked).map((item) => item.id),
+      genesisFounderBadge: achievements.some((item) => item.id === "genesis-founder" && item.unlocked),
+    },
+    achievements,
+  };
 }

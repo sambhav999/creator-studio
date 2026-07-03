@@ -15,6 +15,7 @@ import { generateAndStoreGameThumbnail } from "../services/thumbnailService.js";
 import { logActivity } from "../services/activityService.js";
 import { putBufferOnZeroG } from "../services/zeroGStorage.js";
 import { awardFirstGameBonus, recordCreatorGamePublished } from "../services/pointsService.js";
+import { notifyFollowersOfPublish } from "../services/socialService.js";
 
 const createSchema = z.object({
   templateId: z.string().min(1),
@@ -24,7 +25,7 @@ const createSchema = z.object({
   customization: z.enum(["light", "medium", "heavy"]).optional(),
   extra: z.enum(["none", "powerups", "leaderboard", "boss"]).optional(),
   userId: z.string().optional()
-});
+}).strict();
 
 const promptGenerateSchema = z.object({
   prompt: z.string().min(1),
@@ -36,19 +37,19 @@ const promptGenerateSchema = z.object({
   includePlan: z.boolean().optional(),
   includeCode: z.boolean().optional(),
   includeAssets: z.boolean().optional(),
-  strategy: z.string().optional(),
+  strategy: z.enum(["hybrid", "pure-agent"]).optional(),
   userId: z.string().optional()
-});
+}).strict();
 
 const refineSchema = z.object({
   gamePackage: z.record(z.any()),
   request: z.string().optional(),
   refinementLevel: z.string().optional()
-});
+}).strict();
 
 const exportCodeSchema = z.object({
   gamePackage: z.record(z.any())
-});
+}).strict();
 
 // Created games were previously only visible in the browser that generated
 // them (localStorage). This lists what the backend actually saved so the
@@ -73,6 +74,22 @@ export async function listGames(request, response, next) {
       publishedOnly: !creatorId
     });
     response.json({ games });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function listBrowserFeaturedGames(_request, response, next) {
+  try {
+    const games = await listGamePackages({ limit: 100, publishedOnly: true });
+    response.json({
+      games: games
+        .filter((game) => game.browserFeature?.featured === true)
+        .sort((a, b) =>
+          (Date.parse(b.browserFeature?.featuredAt ?? "") || 0) -
+          (Date.parse(a.browserFeature?.featuredAt ?? "") || 0)
+        )
+    });
   } catch (error) {
     next(error);
   }
@@ -157,11 +174,13 @@ export async function publishGame(request, response, next) {
       creatorId: game.creatorId ?? request.auth?.userId,
       gameId: game.id,
     }).catch(() => null);
+    const notifications = await notifyFollowersOfPublish({ ...game, publish }).catch(() => ({ notified: 0 }));
     response.json({
       ok: true,
       game: { ...game, publish },
       playPath: publish.playPath,
-      points
+      points,
+      notifications
     });
   } catch (error) {
     next(error);
@@ -200,9 +219,66 @@ export async function unpublishGame(request, response, next) {
   }
 }
 
+const browserFeatureSchema = z.object({
+  reason: z.string().max(240).optional(),
+}).strict();
+
+export async function featureGameInBrowser(request, response, next) {
+  try {
+    const game = await getGamePackageById(request.params.gameId);
+    if (!game) {
+      response.status(404).json({ error: "Game not found" });
+      return;
+    }
+    if (game.creatorId && game.creatorId !== request.auth?.userId) {
+      response.status(403).json({ error: "Only the creator can request browser featuring" });
+      return;
+    }
+    if (game.publish?.published !== true) {
+      response.status(409).json({ error: "Only published games can be featured in Browser" });
+      return;
+    }
+    const input = browserFeatureSchema.parse(request.body ?? {});
+    const browserFeature = {
+      featured: true,
+      featuredAt: new Date(),
+      requestedBy: request.auth?.userId ?? null,
+      reason: input.reason ?? null
+    };
+    await updateGamePackageFields(game.id, { browserFeature });
+    response.json({ ok: true, game: { ...game, browserFeature } });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function unfeatureGameInBrowser(request, response, next) {
+  try {
+    const game = await getGamePackageById(request.params.gameId);
+    if (!game) {
+      response.status(404).json({ error: "Game not found" });
+      return;
+    }
+    if (game.creatorId && game.creatorId !== request.auth?.userId) {
+      response.status(403).json({ error: "Only the creator can remove browser featuring" });
+      return;
+    }
+    const browserFeature = {
+      ...(game.browserFeature ?? {}),
+      featured: false,
+      unfeaturedAt: new Date(),
+      requestedBy: request.auth?.userId ?? null
+    };
+    await updateGamePackageFields(game.id, { browserFeature });
+    response.json({ ok: true, game: { ...game, browserFeature } });
+  } catch (error) {
+    next(error);
+  }
+}
+
 const saveSchema = z.object({
   gamePackage: z.record(z.any())
-});
+}).strict();
 
 // Saves an edited game (title, settings, code) from the post-creation editor.
 // Only the creator may modify their game — wallet identity is the user.

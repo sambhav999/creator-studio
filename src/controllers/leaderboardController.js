@@ -4,17 +4,17 @@ import { logActivity, getGameTitle } from "../services/activityService.js";
 
 const gameParamsSchema = z.object({
   gameId: z.string().min(1),
-});
+}).strict();
 
 const leaderboardQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(500).default(500),
-});
+}).strict();
 
 const scoreSchema = z.object({
   userId: z.string().min(1),
   username: z.string().min(1).max(50),
   score: z.coerce.number().finite().nonnegative(),
-});
+}).strict();
 
 export async function handleGetLeaderboard(request, response, next) {
   try {
