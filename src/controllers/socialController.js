@@ -350,7 +350,8 @@ export async function handleGetPointSummary(req, res, next) {
     const summary = await getPointSummary(userId);
     res.json({
       userId,
-      lifetimePoints: summary?.lifetimePoints ?? 0,
+      kultPoints: summary?.kultPoints ?? 0,
+      lifetimePoints: summary?.lifetimePoints ?? summary?.kultPoints ?? 0,
       dailyPoints: summary?.dailyPoints ?? {},
       weeklyPoints: summary?.weeklyPoints ?? {},
       currentDay: summary?.currentDay ?? null,

@@ -135,9 +135,15 @@ async function issueRewards(attribution, gameId = attribution.qualifiedGameId ??
     userId: attribution.referrerId,
     gameId,
     activityType: "reward_claim",
-    details: `Referral reward claimed: ${POINT_VALUES.referralPlay} KP`
+    details: `Invite reward claimed: ${POINT_VALUES.referralInviterKp} KP and ${POINT_VALUES.referralInviterCs} CS`
   });
-  return { status: "rewarded", referrerReward: POINT_VALUES.referralPlay, referredReward: 0, points };
+  return {
+    status: "rewarded",
+    referrerReward: POINT_VALUES.referralInviterKp,
+    referredReward: POINT_VALUES.referralFriendKp,
+    creatorScoreReward: POINT_VALUES.referralInviterCs,
+    points,
+  };
 }
 
 export async function qualifyReferral({ userId, gameId, durationSeconds }) {

@@ -1,5 +1,4 @@
 import { app } from "./app.js";
-import { syncCreatorKpToBrowserBalances } from "./services/pointsService.js";
 
 const port = process.env.PORT || 3001;
 
@@ -28,17 +27,3 @@ server.on("error", error => {
 
   throw error;
 });
-
-if (process.env.DISABLE_BROWSER_KP_STARTUP_SYNC !== "true") {
-  setTimeout(() => {
-    syncCreatorKpToBrowserBalances()
-      .then(result => {
-        if (result.processed > 0) {
-          console.log("KULT Browser KP sync complete", result);
-        }
-      })
-      .catch(error => {
-        console.error("KULT Browser KP sync failed", error);
-      });
-  }, 1000);
-}

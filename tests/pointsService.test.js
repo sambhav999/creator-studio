@@ -3,14 +3,15 @@ import assert from "node:assert/strict";
 import {
   POINT_VALUES,
   __setPointsTestHarness,
+  awardFollowCreator,
   awardFirstGameBonus,
   awardLike,
   awardQualifiedPlay,
   awardReferralPlay,
   awardShare,
+  getCreatorScoreSummary,
   getPointSummary,
   recordCreatorGamePublished,
-  syncCreatorKpToBrowserBalances,
 } from "../src/services/pointsService.js";
 
 function getByPath(object, path) {
@@ -39,6 +40,9 @@ function matches(doc, filter) {
     if (value && typeof value === "object" && "$gt" in value) {
       return current > value.$gt;
     }
+    if (value && typeof value === "object" && "$in" in value) {
+      return value.$in.includes(current);
+    }
     return current === value;
   });
 }
@@ -54,6 +58,10 @@ class MemoryCollection {
 
   async createIndex() {
     return "ok";
+  }
+
+  async countDocuments(filter = {}) {
+    return this.docs.filter((item) => matches(item, filter)).length;
   }
 
   async findOne(filter, options = {}) {
@@ -108,11 +116,11 @@ class MemoryCollection {
 
 function setupHarness(game = {}) {
   const collections = {
-    ledger: new MemoryCollection(),
-    balances: new MemoryCollection(),
+    playerKpLedger: new MemoryCollection(),
     browserBalances: new MemoryCollection(),
+    creatorScoreLedger: new MemoryCollection(),
+    creatorScoreBalances: new MemoryCollection(),
     creators: new MemoryCollection(),
-    players: new MemoryCollection(),
   };
   const gameCollection = new MemoryCollection([
     {
@@ -126,7 +134,7 @@ function setupHarness(game = {}) {
   return { collections, gameCollection };
 }
 
-test("awards likes idempotently to the creator and mirrors game points", async () => {
+test("like rewards player KP in Browser balance and creator CS in Studio only", async () => {
   const { collections, gameCollection } = setupHarness();
   const game = { id: "game-1", creatorId: "creator-1" };
 
@@ -134,66 +142,104 @@ test("awards likes idempotently to the creator and mirrors game points", async (
   const duplicate = await awardLike({ game, actorId: "player-1" });
 
   assert.equal(first.awarded, true);
-  assert.equal(first.points, POINT_VALUES.like);
+  assert.equal(first.playerKp.kp, POINT_VALUES.playerLike);
+  assert.equal(first.creatorScore.cs, POINT_VALUES.creatorLike);
   assert.equal(duplicate.awarded, false);
   assert.equal(duplicate.duplicate, true);
 
-  assert.equal(collections.ledger.docs.length, 1);
-  assert.equal(collections.balances.docs[0].userId, "creator-1");
-  assert.equal(collections.balances.docs[0].lifetimePoints, POINT_VALUES.like);
-  assert.equal(collections.browserBalances.docs[0].walletAddress, "creator-1");
-  assert.equal(collections.browserBalances.docs[0].kultPoints, POINT_VALUES.like);
-  assert.equal(collections.players.docs[0].walletAddress, "creator-1");
-  assert.equal(collections.players.docs[0].kultPoints, POINT_VALUES.like);
+  assert.equal(collections.playerKpLedger.docs.length, 1);
+  assert.equal(collections.creatorScoreLedger.docs.length, 1);
+  assert.equal(collections.browserBalances.docs[0].walletAddress, "player-1");
+  assert.equal(collections.browserBalances.docs[0].kultPoints, POINT_VALUES.playerLike);
+  assert.equal(collections.creatorScoreBalances.docs[0].creatorId, "creator-1");
+  assert.equal(collections.creatorScoreBalances.docs[0].lifetimeScore, POINT_VALUES.creatorLike);
 
   const storedGame = await gameCollection.findOne({ id: "game-1" });
-  assert.deepEqual(storedGame.points, { plays: 0, likes: 1, shares: 0, total: POINT_VALUES.like });
+  assert.deepEqual(storedGame.points, { plays: 0, likes: 1, shares: 0, total: POINT_VALUES.creatorLike });
 });
 
-test("awards qualified plays only when duration reaches 30 seconds", async () => {
+test("qualified play rewards first play then replay, and ignores self-play", async () => {
   const { collections, gameCollection } = setupHarness();
   const game = { id: "game-1", creatorId: "creator-1" };
 
-  const short = await awardQualifiedPlay({
+  const self = await awardQualifiedPlay({
     game,
-    actorId: "player-1",
-    sessionId: "session-short",
-    durationSeconds: 29,
+    actorId: "creator-1",
+    sessionId: "self-session",
+    durationSeconds: 30,
   });
-  const qualified = await awardQualifiedPlay({
+  const first = await awardQualifiedPlay({
     game,
     actorId: "player-1",
-    sessionId: "session-ok",
+    sessionId: "session-1",
+    durationSeconds: 30,
+  });
+  const replay = await awardQualifiedPlay({
+    game,
+    actorId: "player-1",
+    sessionId: "session-2",
     durationSeconds: 30,
   });
 
-  assert.equal(short.awarded, false);
-  assert.equal(qualified.awarded, true);
-  assert.equal(collections.ledger.docs.length, 1);
+  assert.equal(self.awarded, false);
+  assert.equal(self.reason, "self-play");
+  assert.equal(first.playerKp.kp, POINT_VALUES.playerFirstPlay);
+  assert.equal(first.creatorScore.cs, POINT_VALUES.creatorFirstPlay);
+  assert.equal(replay.playerKp.kp, POINT_VALUES.playerReplay);
+  assert.equal(replay.creatorScore.cs, POINT_VALUES.creatorReplay);
+  assert.equal(collections.browserBalances.docs[0].kultPoints, POINT_VALUES.playerFirstPlay + POINT_VALUES.playerReplay);
+  assert.equal(collections.creatorScoreBalances.docs[0].lifetimeScore, POINT_VALUES.creatorFirstPlay + POINT_VALUES.creatorReplay);
 
   const storedGame = await gameCollection.findOne({ id: "game-1" });
-  assert.deepEqual(storedGame.points, { plays: 1, likes: 0, shares: 0, total: POINT_VALUES.qualifiedPlay });
+  assert.deepEqual(storedGame.points, {
+    plays: 2,
+    likes: 0,
+    shares: 0,
+    total: POINT_VALUES.creatorFirstPlay + POINT_VALUES.creatorReplay,
+  });
 });
 
-test("awards shares and first-game bonus without double-paying", async () => {
+test("share and publish keep KP and CS separate", async () => {
   const { collections } = setupHarness();
   const game = { id: "game-1", creatorId: "creator-1" };
 
   await awardShare({ game, actorId: "player-1", platform: "link" });
   await awardShare({ game, actorId: "player-1", platform: "link" });
-  const bonus = await awardFirstGameBonus({ creatorId: "creator-1", gameId: "game-1" });
-  const duplicateBonus = await awardFirstGameBonus({ creatorId: "creator-1", gameId: "game-2" });
+  const publish = await awardFirstGameBonus({ creatorId: "creator-1", gameId: "game-1" });
+  const duplicatePublish = await awardFirstGameBonus({ creatorId: "creator-1", gameId: "game-1" });
 
-  assert.equal(bonus.awarded, true);
-  assert.equal(duplicateBonus.awarded, false);
-  assert.equal(collections.ledger.docs.length, 2);
+  assert.equal(publish.awarded, true);
+  assert.equal(duplicatePublish.awarded, false);
+  assert.equal(collections.playerKpLedger.docs.length, 2);
+  assert.equal(collections.creatorScoreLedger.docs.length, 2);
 
-  const summary = await getPointSummary("creator-1");
-  assert.equal(summary.lifetimePoints, POINT_VALUES.share + POINT_VALUES.firstGameBonus);
-  assert.equal(collections.browserBalances.docs[0].kultPoints, POINT_VALUES.share + POINT_VALUES.firstGameBonus);
+  const playerSummary = await getPointSummary("player-1");
+  const creatorKpSummary = await getPointSummary("creator-1");
+  const creatorScore = await getCreatorScoreSummary("creator-1");
+  assert.equal(playerSummary.lifetimePoints, POINT_VALUES.playerShare);
+  assert.equal(creatorKpSummary.lifetimePoints, POINT_VALUES.playerPublish);
+  assert.equal(creatorScore.lifetimeScore, POINT_VALUES.creatorShare + POINT_VALUES.creatorPublish);
 });
 
-test("records unique creator published games separately from first-game bonus", async () => {
+test("follow rewards follower KP and creator CS once", async () => {
+  const { collections } = setupHarness();
+
+  const first = await awardFollowCreator({ creatorId: "creator-1", followerId: "player-1" });
+  const duplicate = await awardFollowCreator({ creatorId: "creator-1", followerId: "player-1" });
+  const self = await awardFollowCreator({ creatorId: "creator-1", followerId: "creator-1" });
+
+  assert.equal(first.awarded, true);
+  assert.equal(first.playerKp.kp, POINT_VALUES.playerFollow);
+  assert.equal(first.creatorScore.cs, POINT_VALUES.creatorFollow);
+  assert.equal(duplicate.awarded, false);
+  assert.equal(self.reason, "self-follow");
+  assert.equal(collections.browserBalances.docs[0].walletAddress, "player-1");
+  assert.equal(collections.browserBalances.docs[0].kultPoints, POINT_VALUES.playerFollow);
+  assert.equal(collections.creatorScoreBalances.docs[0].creatorId, "creator-1");
+  assert.equal(collections.creatorScoreBalances.docs[0].lifetimeScore, POINT_VALUES.creatorFollow);
+});
+
+test("records unique creator published games separately from publish rewards", async () => {
   const { collections } = setupHarness();
 
   const firstRecord = await recordCreatorGamePublished({ creatorId: "creator-1", gameId: "game-1" });
@@ -207,10 +253,10 @@ test("records unique creator published games separately from first-game bonus", 
   assert.equal(secondRecord.recorded, true);
   assert.equal(collections.creators.docs[0].gamesCreated, 2);
   assert.deepEqual(collections.creators.docs[0].publishedGameIds, ["game-1", "game-2"]);
-  assert.equal(collections.ledger.docs.length, 1);
+  assert.equal(collections.creatorScoreLedger.docs.length, 2);
 });
 
-test("awards referral play to the referrer using V1 KP value", async () => {
+test("invite rewards inviter and friend KP plus inviter CS", async () => {
   const { collections } = setupHarness();
 
   const result = await awardReferralPlay({
@@ -227,37 +273,12 @@ test("awards referral play to the referrer using V1 KP value", async () => {
   });
 
   assert.equal(result.awarded, true);
-  assert.equal(result.points, POINT_VALUES.referralPlay);
+  assert.equal(result.playerKp.kp, POINT_VALUES.referralInviterKp);
+  assert.equal(result.friendKp.kp, POINT_VALUES.referralFriendKp);
+  assert.equal(result.creatorScore.cs, POINT_VALUES.referralInviterCs);
   assert.equal(duplicate.awarded, false);
-  assert.equal(collections.ledger.docs.length, 1);
-  assert.equal(collections.balances.docs[0].lifetimePoints, POINT_VALUES.referralPlay);
-});
-
-test("syncs unsynced ledger rows into Browser KULT points balances", async () => {
-  const { collections } = setupHarness();
-  collections.ledger.docs.push(
-    {
-      _id: "ledger-1",
-      eventId: "event-1",
-      source: "creator-studio",
-      userId: "0xABC",
-      points: 10,
-      createdAt: "2026-06-30T00:00:00.000Z",
-    },
-    {
-      _id: "ledger-2",
-      eventId: "event-2",
-      source: "creator-studio",
-      userId: "0xABC",
-      points: 5,
-      browserBalanceSyncedAt: "2026-06-30T00:00:00.000Z",
-    },
-  );
-
-  const result = await syncCreatorKpToBrowserBalances();
-
-  assert.deepEqual(result, { dryRun: false, processed: 1, synced: 1, skipped: 0 });
-  assert.equal(collections.browserBalances.docs[0].walletAddress, "0xabc");
-  assert.equal(collections.browserBalances.docs[0].kultPoints, 10);
-  assert.ok(collections.ledger.docs[0].browserBalanceSyncedAt);
+  assert.equal(collections.playerKpLedger.docs.length, 2);
+  assert.equal(collections.creatorScoreLedger.docs.length, 1);
+  assert.equal(collections.browserBalances.docs.find((doc) => doc.walletAddress === "creator-1").kultPoints, POINT_VALUES.referralInviterKp);
+  assert.equal(collections.browserBalances.docs.find((doc) => doc.walletAddress === "player-2").kultPoints, POINT_VALUES.referralFriendKp);
 });

@@ -1,6 +1,6 @@
 import { getDatabase, getGameCollection, getGamePackageById } from "./databaseService.js";
 import { putJsonOnZeroG } from "./zeroGStorage.js";
-import { awardLike, awardQualifiedPlay, awardShare, getPointSummary } from "./pointsService.js";
+import { awardFollowCreator, awardLike, awardQualifiedPlay, awardShare, getCreatorScoreSummary } from "./pointsService.js";
 
 const COLLECTIONS = {
   likes: "social_likes",
@@ -369,7 +369,10 @@ export async function toggleFollow(creatorId, followerId) {
       await col.insertOne({ creatorId, followerId, createdAt: new Date() });
     }
     const followers = await col.countDocuments({ creatorId });
-    return { creatorId, following: !existing, followers };
+    const points = !existing
+      ? await awardFollowCreator({ creatorId, followerId }).catch(() => null)
+      : null;
+    return { creatorId, following: !existing, followers, points };
   }
 
   const set = memoryStore.follows.get(creatorId) ?? new Set();
@@ -377,7 +380,10 @@ export async function toggleFollow(creatorId, followerId) {
   if (following) set.add(followerId);
   else set.delete(followerId);
   memoryStore.follows.set(creatorId, set);
-  return { creatorId, following, followers: set.size };
+  const points = following
+    ? await awardFollowCreator({ creatorId, followerId }).catch(() => null)
+    : null;
+  return { creatorId, following, followers: set.size, points };
 }
 
 export async function getFollowStatus(creatorId, followerId) {
@@ -418,10 +424,10 @@ export async function getCreatorStats(creatorId) {
       .toArray();
     const gameIds = ownGames.map((g) => g.id);
     const db = await getDatabase();
-    const [likes, followers, points] = await Promise.all([
+    const [likes, followers, creatorScore] = await Promise.all([
       gameIds.length ? db.collection(COLLECTIONS.likes).countDocuments({ gameId: { $in: gameIds } }) : 0,
       db.collection(COLLECTIONS.follows).countDocuments({ creatorId }),
-      getPointSummary(creatorId),
+      getCreatorScoreSummary(creatorId),
     ]);
     const plays = ownGames.reduce((total, g) => total + (g.views ?? 0), 0);
     const profile = {
@@ -430,11 +436,15 @@ export async function getCreatorStats(creatorId) {
       plays,
       likes,
       followers,
-      lifetimePoints: points?.lifetimePoints ?? 0,
-      dailyPoints: points?.dailyPoints ?? {},
-      weeklyPoints: points?.weeklyPoints ?? {},
-      currentDay: points?.currentDay ?? null,
-      currentWeek: points?.currentWeek ?? null,
+      creatorScore: creatorScore?.lifetimeScore ?? creatorScore?.lifetimePoints ?? 0,
+      lifetimeScore: creatorScore?.lifetimeScore ?? creatorScore?.lifetimePoints ?? 0,
+      dailyScore: creatorScore?.dailyScore ?? creatorScore?.dailyPoints ?? {},
+      weeklyScore: creatorScore?.weeklyScore ?? creatorScore?.weeklyPoints ?? {},
+      lifetimePoints: creatorScore?.lifetimePoints ?? creatorScore?.lifetimeScore ?? 0,
+      dailyPoints: creatorScore?.dailyPoints ?? creatorScore?.dailyScore ?? {},
+      weeklyPoints: creatorScore?.weeklyPoints ?? creatorScore?.weeklyScore ?? {},
+      currentDay: creatorScore?.currentDay ?? null,
+      currentWeek: creatorScore?.currentWeek ?? null,
     };
     void putJsonOnZeroG({
       objectType: "profile-snapshot",
@@ -455,6 +465,10 @@ export async function getCreatorStats(creatorId) {
       plays: 0,
       likes: 0,
       followers: 0,
+      creatorScore: 0,
+      lifetimeScore: 0,
+      dailyScore: {},
+      weeklyScore: {},
       lifetimePoints: 0,
       dailyPoints: {},
       weeklyPoints: {},
