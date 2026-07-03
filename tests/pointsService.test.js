@@ -5,9 +5,14 @@ import {
   __setPointsTestHarness,
   awardFollowCreator,
   awardFirstGameBonus,
+  awardDailyChallenge,
+  awardDailyLogin,
+  awardGameCompletion,
   awardLike,
+  awardMilestone,
   awardQualifiedPlay,
   awardReferralPlay,
+  awardRemix,
   awardShare,
   getCreatorScoreSummary,
   getPointSummary,
@@ -30,6 +35,9 @@ function setByPath(object, path, value) {
 
 function matches(doc, filter) {
   return Object.entries(filter).every(([key, value]) => {
+    if (key === "$or" && Array.isArray(value)) {
+      return value.some((candidate) => matches(doc, candidate));
+    }
     const current = getByPath(doc, key);
     if (value && typeof value === "object" && "$ne" in value) {
       return Array.isArray(current) ? !current.includes(value.$ne) : current !== value.$ne;
@@ -39,6 +47,12 @@ function matches(doc, filter) {
     }
     if (value && typeof value === "object" && "$gt" in value) {
       return current > value.$gt;
+    }
+    if (value && typeof value === "object" && "$gte" in value) {
+      return new Date(current).getTime() >= new Date(value.$gte).getTime();
+    }
+    if (value && typeof value === "object" && "$lte" in value) {
+      return new Date(current).getTime() <= new Date(value.$lte).getTime();
     }
     if (value && typeof value === "object" && "$in" in value) {
       return value.$in.includes(current);
@@ -121,6 +135,8 @@ function setupHarness(game = {}) {
     creatorScoreLedger: new MemoryCollection(),
     creatorScoreBalances: new MemoryCollection(),
     creators: new MemoryCollection(),
+    badges: new MemoryCollection(),
+    botSignals: new MemoryCollection(),
   };
   const gameCollection = new MemoryCollection([
     {
@@ -281,4 +297,42 @@ test("invite rewards inviter and friend KP plus inviter CS", async () => {
   assert.equal(collections.creatorScoreLedger.docs.length, 1);
   assert.equal(collections.browserBalances.docs.find((doc) => doc.walletAddress === "creator-1").kultPoints, POINT_VALUES.referralInviterKp);
   assert.equal(collections.browserBalances.docs.find((doc) => doc.walletAddress === "player-2").kultPoints, POINT_VALUES.referralFriendKp);
+});
+
+test("completion daily login challenge remix and milestone rewards match the spec", async () => {
+  const { collections } = setupHarness();
+  const game = { id: "game-1", creatorId: "creator-1" };
+
+  const completion = await awardGameCompletion({ game, actorId: "player-1", completionId: "complete-1" });
+  const dailyLogin = await awardDailyLogin({ userId: "player-1" });
+  const dailyChallenge = await awardDailyChallenge({
+    userId: "player-1",
+    creatorId: "creator-1",
+    challengeId: "challenge-1",
+    gameId: "game-1",
+  });
+  const remix = await awardRemix({
+    newCreatorId: "creator-2",
+    originalCreatorId: "creator-1",
+    originalGameId: "game-1",
+    remixGameId: "game-2",
+  });
+  const milestone = await awardMilestone({
+    userId: "creator-1",
+    creatorId: "creator-1",
+    gameId: "game-1",
+    milestone: "genesis_creator_10000_plays",
+  });
+
+  assert.equal(completion.playerKp.kp, POINT_VALUES.playerComplete);
+  assert.equal(completion.creatorScore.cs, POINT_VALUES.creatorComplete);
+  assert.equal(dailyLogin.kp, POINT_VALUES.dailyLoginKp);
+  assert.equal(dailyChallenge.playerKp.kp, POINT_VALUES.dailyChallengeKp);
+  assert.equal(dailyChallenge.creatorScore.cs, POINT_VALUES.dailyChallengeCs);
+  assert.equal(remix.playerKp.kp, POINT_VALUES.remixNewCreatorKp);
+  assert.equal(remix.creatorScore.cs, POINT_VALUES.remixNewCreatorCs);
+  assert.equal(remix.originalCreatorScore.cs, POINT_VALUES.remixOriginalCreatorCs);
+  assert.equal(milestone.playerKp.kp, POINT_VALUES.genesisCreatorKp);
+  assert.equal(milestone.creatorScore.cs, POINT_VALUES.genesisCreatorCs);
+  assert.equal(collections.badges.docs[0].badgeId, "genesis_creator");
 });

@@ -16,11 +16,17 @@ import {
   handleRecordView,
   handleGetViewCount,
   handleRecordQualifiedPlay,
+  handleRecordCompletion,
+  handleDailyLogin,
+  handleDailyChallenge,
+  handleRecordRemix,
+  handleRecordMilestone,
   handleToggleFollow,
   handleGetFollowStatus,
   handleGetFollowing,
   handleGetCreatorStats,
   handleGetPointSummary,
+  handleGetEconomyLeaderboard,
   handleGetTopViewed,
   handleGetDailyChallenges,
   handleGetAchievements,
@@ -60,6 +66,13 @@ socialRouter.get("/views-top", handleGetTopViewed);
 socialRouter.post("/views/:gameId", handleRecordView);
 socialRouter.get("/views/:gameId", handleGetViewCount);
 socialRouter.post("/plays/:gameId/qualify", handleRecordQualifiedPlay);
+socialRouter.post("/completions/:gameId", handleRecordCompletion);
+
+// Dual economy reward hooks
+socialRouter.post("/daily-login", handleDailyLogin);
+socialRouter.post("/daily-challenge", handleDailyChallenge);
+socialRouter.post("/remixes", handleRecordRemix);
+socialRouter.post("/milestones", handleRecordMilestone);
 
 // Follows
 socialRouter.post("/follows/toggle", handleToggleFollow);
@@ -69,6 +82,7 @@ socialRouter.get("/follows/:creatorId", handleGetFollowStatus);
 // Creator profile stats (real numbers)
 socialRouter.get("/creator-stats/:creatorId", handleGetCreatorStats);
 socialRouter.get("/points/:userId", handleGetPointSummary);
+socialRouter.get("/economy-leaderboard", handleGetEconomyLeaderboard);
 socialRouter.get("/daily-challenges/:userId", handleGetDailyChallenges);
 socialRouter.get("/achievements/:userId", handleGetAchievements);
 socialRouter.get("/notifications/:userId", handleGetNotifications);

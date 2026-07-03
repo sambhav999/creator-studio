@@ -24,6 +24,12 @@ import {
   getAchievements,
   getNotifications,
   markNotificationsRead,
+  recordGameCompletion,
+  recordDailyLogin,
+  recordDailyChallenge,
+  recordRemix,
+  recordMilestone,
+  getEconomyLeaderboard,
 } from "../services/socialService.js";
 import { logActivity, getGameTitle, getUserActivities } from "../services/activityService.js";
 import { getPointSummary } from "../services/pointsService.js";
@@ -275,7 +281,60 @@ const qualifiedPlaySchema = z.object({
   userId: z.string().min(1),
   sessionId: z.string().min(1),
   durationSeconds: z.coerce.number().positive(),
+  deviceId: z.string().optional(),
 }).strict();
+
+const completionSchema = z.object({
+  userId: z.string().min(1),
+  completionId: z.string().optional(),
+  deviceId: z.string().optional(),
+}).strict();
+
+const dailyLoginSchema = z.object({
+  userId: z.string().min(1),
+  deviceId: z.string().optional(),
+}).strict();
+
+const dailyChallengeSchema = z.object({
+  userId: z.string().min(1),
+  creatorId: z.string().optional(),
+  challengeId: z.string().min(1),
+  gameId: z.string().optional(),
+  deviceId: z.string().optional(),
+}).strict();
+
+const remixSchema = z.object({
+  newCreatorId: z.string().min(1),
+  originalCreatorId: z.string().min(1),
+  originalGameId: z.string().optional(),
+  remixGameId: z.string().min(1),
+  deviceId: z.string().optional(),
+}).strict();
+
+const milestoneSchema = z.object({
+  userId: z.string().min(1),
+  creatorId: z.string().min(1),
+  gameId: z.string().optional(),
+  milestone: z.enum(["trending_daily_top", "trending_top_100", "featured_browser", "genesis_creator_10000_plays"]),
+  deviceId: z.string().optional(),
+}).strict();
+
+const economyLeaderboardSchema = z.object({
+  economy: z.enum(["kp", "player", "cs", "creator"]).default("cs"),
+  period: z.enum(["weekly", "all-time"]).default("all-time"),
+  limit: z.coerce.number().int().min(1).max(500).default(100),
+}).strict();
+
+function requestSignals(req, deviceId) {
+  const forwarded = req.headers["x-forwarded-for"];
+  const ip = String(Array.isArray(forwarded) ? forwarded[0] : forwarded || req.ip || "")
+    .split(",")[0]
+    .trim();
+  return {
+    ip,
+    deviceId: deviceId || req.get("x-device-id") || undefined,
+  };
+}
 
 export async function handleRecordView(req, res, next) {
   try {
@@ -299,8 +358,72 @@ export async function handleGetViewCount(req, res, next) {
 export async function handleRecordQualifiedPlay(req, res, next) {
   try {
     const input = qualifiedPlaySchema.parse(req.body ?? {});
-    const result = await recordQualifiedPlay(req.params.gameId, input);
+    const result = await recordQualifiedPlay(req.params.gameId, {
+      ...input,
+      signals: requestSignals(req, input.deviceId),
+    });
     res.status(result.qualified ? 201 : 202).json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function handleRecordCompletion(req, res, next) {
+  try {
+    const input = completionSchema.parse(req.body ?? {});
+    const result = await recordGameCompletion(req.params.gameId, {
+      ...input,
+      signals: requestSignals(req, input.deviceId),
+    });
+    res.status(result.completed ? 201 : 202).json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function handleDailyLogin(req, res, next) {
+  try {
+    const input = dailyLoginSchema.parse(req.body ?? {});
+    res.status(201).json(await recordDailyLogin({
+      ...input,
+      signals: requestSignals(req, input.deviceId),
+    }));
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function handleDailyChallenge(req, res, next) {
+  try {
+    const input = dailyChallengeSchema.parse(req.body ?? {});
+    res.status(201).json(await recordDailyChallenge({
+      ...input,
+      signals: requestSignals(req, input.deviceId),
+    }));
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function handleRecordRemix(req, res, next) {
+  try {
+    const input = remixSchema.parse(req.body ?? {});
+    res.status(201).json(await recordRemix({
+      ...input,
+      signals: requestSignals(req, input.deviceId),
+    }));
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function handleRecordMilestone(req, res, next) {
+  try {
+    const input = milestoneSchema.parse(req.body ?? {});
+    res.status(201).json(await recordMilestone({
+      ...input,
+      signals: requestSignals(req, input.deviceId),
+    }));
   } catch (error) {
     next(error);
   }
@@ -355,6 +478,7 @@ export async function handleGetPointSummary(req, res, next) {
     res.json({
       userId,
       kultPoints: summary?.kultPoints ?? 0,
+      level: summary?.level ?? null,
       lifetimePoints: summary?.lifetimePoints ?? summary?.kultPoints ?? 0,
       dailyPoints: summary?.dailyPoints ?? {},
       weeklyPoints: summary?.weeklyPoints ?? {},
@@ -362,6 +486,15 @@ export async function handleGetPointSummary(req, res, next) {
       currentWeek: summary?.currentWeek ?? null,
       updatedAt: summary?.updatedAt ?? null,
     });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function handleGetEconomyLeaderboard(req, res, next) {
+  try {
+    const query = economyLeaderboardSchema.parse(req.query);
+    res.json(await getEconomyLeaderboard(query));
   } catch (error) {
     next(error);
   }

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { getDatabase, getDatabaseByName, getGameCollection } from "./databaseService.js";
 
 export const POINT_VALUES = Object.freeze({
@@ -7,6 +8,8 @@ export const POINT_VALUES = Object.freeze({
   creatorFirstPlay: 10,
   playerReplay: 5,
   creatorReplay: 2,
+  playerComplete: 20,
+  creatorComplete: 5,
   playerLike: 2,
   creatorLike: 15,
   playerShare: 10,
@@ -18,6 +21,20 @@ export const POINT_VALUES = Object.freeze({
   referralInviterKp: 200,
   referralFriendKp: 100,
   referralInviterCs: 100,
+  dailyLoginKp: 10,
+  dailyChallengeKp: 100,
+  dailyChallengeCs: 250,
+  remixNewCreatorKp: 25,
+  remixNewCreatorCs: 40,
+  remixOriginalCreatorCs: 30,
+  trendingDailyTopKp: 500,
+  trendingDailyTopCs: 1000,
+  trendingTop100Kp: 150,
+  trendingTop100Cs: 300,
+  featuredKp: 1000,
+  featuredCs: 3000,
+  genesisCreatorKp: 1000,
+  genesisCreatorCs: 5000,
 
   // Backward-compatible aliases used by older call sites.
   qualifiedPlay: 2,
@@ -36,6 +53,8 @@ const DEFAULT_COLLECTIONS = Object.freeze({
   creatorScoreLedger: "creator_score_ledger",
   creatorScoreBalances: "creator_score_balances",
   creators: "creators",
+  badges: "creator_badges",
+  botSignals: "reward_bot_signals",
 });
 
 let indexesReady;
@@ -53,6 +72,33 @@ function browserDatabaseName() {
 function normalizeUserId(userId) {
   const value = String(userId || "").trim();
   return /^0x/i.test(value) ? value.toLowerCase() : value;
+}
+
+function hashValue(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  return createHash("sha256")
+    .update(`${process.env.REWARD_SIGNAL_SALT || "kult-reward-v1"}:${raw}`)
+    .digest("hex");
+}
+
+export function kpLevelForPoints(points) {
+  const total = Math.max(0, Number(points) || 0);
+  let level = 1;
+  let threshold = 100;
+  let remaining = total;
+  while (remaining >= threshold && level < 100) {
+    remaining -= threshold;
+    level += 1;
+    threshold = Math.round(threshold * 1.18 + 25);
+  }
+  return {
+    level,
+    points: total,
+    currentLevelPoints: remaining,
+    nextLevelPoints: threshold,
+    progress: threshold > 0 ? Math.min(1, remaining / threshold) : 1,
+  };
 }
 
 function sameUser(a, b) {
@@ -104,6 +150,8 @@ async function collections() {
   const creatorScoreLedger = studioDb.collection(collectionName("creatorScoreLedger"));
   const creatorScoreBalances = studioDb.collection(collectionName("creatorScoreBalances"));
   const creators = studioDb.collection(collectionName("creators"));
+  const badges = studioDb.collection(collectionName("badges"));
+  const botSignals = studioDb.collection(collectionName("botSignals"));
 
   if (!indexesReady) {
     indexesReady = Promise.allSettled([
@@ -115,6 +163,10 @@ async function collections() {
       creatorScoreLedger.createIndex({ creatorId: 1, action: 1, targetGameId: 1, day: 1 }, { name: "creator_score_creator_action_game_day" }),
       creatorScoreBalances.createIndex({ creatorId: 1 }, { unique: true, name: "creator_score_creatorId_unique" }),
       creators.createIndex({ creatorId: 1 }, { unique: true, name: "creators_creatorId_unique" }),
+      badges.createIndex({ badgeId: 1, userId: 1 }, { unique: true, name: "badges_badge_user_unique" }),
+      botSignals.createIndex({ userId: 1, createdAt: -1 }, { name: "reward_signals_user_createdAt" }),
+      botSignals.createIndex({ ipHash: 1, createdAt: -1 }, { name: "reward_signals_ip_createdAt" }),
+      botSignals.createIndex({ deviceHash: 1, createdAt: -1 }, { name: "reward_signals_device_createdAt" }),
     ]).then((results) => {
       for (const result of results) {
         if (result.status === "rejected") {
@@ -125,7 +177,7 @@ async function collections() {
   }
   await indexesReady;
 
-  return { playerKpLedger, browserBalances, creatorScoreLedger, creatorScoreBalances, creators };
+  return { playerKpLedger, browserBalances, creatorScoreLedger, creatorScoreBalances, creators, badges, botSignals };
 }
 
 export function buildPointEventId(type, parts) {
@@ -141,6 +193,41 @@ async function insertLedgerEvent(collection, event) {
   return Boolean(insertResult.upsertedCount);
 }
 
+async function checkBotSignals({ userId, action, ip, deviceId, now = new Date() }) {
+  const { botSignals } = await collections();
+  const user = normalizeUserId(userId);
+  const ipHash = hashValue(ip);
+  const deviceHash = hashValue(deviceId);
+  const since = new Date(now.getTime() - 60 * 60 * 1000);
+  const query = {
+    createdAt: { $gte: since },
+    $or: [
+      user ? { userId: user } : null,
+      ipHash ? { ipHash } : null,
+      deviceHash ? { deviceHash } : null,
+    ].filter(Boolean),
+  };
+  const recent = query.$or.length ? await botSignals.countDocuments(query) : 0;
+  const blocked = recent >= 120;
+  const signalId = buildPointEventId("signal", [user, action, now.getTime(), Math.random().toString(36).slice(2)]);
+  await botSignals.updateOne(
+    { signalId },
+    {
+      $setOnInsert: {
+        signalId,
+        userId: user,
+        action,
+        ipHash,
+        deviceHash,
+        blocked,
+        createdAt: now,
+      },
+    },
+    { upsert: true },
+  );
+  return blocked ? { allowed: false, reason: "bot-velocity" } : { allowed: true };
+}
+
 export async function awardPlayerKp({
   eventId,
   userId,
@@ -149,6 +236,7 @@ export async function awardPlayerKp({
   targetGameId,
   sourceUserId,
   metadata = {},
+  signals = {},
   now = new Date(),
 }) {
   const normalizedUserId = normalizeUserId(userId);
@@ -156,6 +244,8 @@ export async function awardPlayerKp({
 
   const amount = Number(kp);
   if (!Number.isFinite(amount) || amount <= 0) return { awarded: false, reason: "invalid-kp", kp: 0 };
+  const botCheck = await checkBotSignals({ userId: normalizedUserId, action, ...signals, now });
+  if (!botCheck.allowed) return { awarded: false, reason: botCheck.reason, kp: 0 };
 
   const { playerKpLedger, browserBalances } = await collections();
   const event = {
@@ -199,6 +289,7 @@ export async function awardCreatorScore({
   targetGameId,
   sourceUserId,
   metadata = {},
+  signals = {},
   now = new Date(),
 }) {
   const normalizedCreatorId = normalizeUserId(creatorId);
@@ -206,6 +297,8 @@ export async function awardCreatorScore({
 
   const amount = Number(cs);
   if (!Number.isFinite(amount) || amount <= 0) return { awarded: false, reason: "invalid-cs", cs: 0 };
+  const botCheck = await checkBotSignals({ userId: sourceUserId ?? normalizedCreatorId, action, ...signals, now });
+  if (!botCheck.allowed) return { awarded: false, reason: botCheck.reason, cs: 0 };
 
   const { creatorScoreLedger, creatorScoreBalances, creators } = await collections();
   const event = {
@@ -308,7 +401,7 @@ function dualAwardResult({ playerKp, creatorScore, action, pointsForGame }) {
   };
 }
 
-export async function awardQualifiedPlay({ game, actorId, sessionId, durationSeconds, now = new Date() }) {
+export async function awardQualifiedPlay({ game, actorId, sessionId, durationSeconds, now = new Date(), signals = {} }) {
   if (!game?.id || !game?.creatorId || !actorId || Number(durationSeconds) < 30) {
     return { awarded: false, reason: "not-qualified", playerKp: null, creatorScore: null };
   }
@@ -340,6 +433,7 @@ export async function awardQualifiedPlay({ game, actorId, sessionId, durationSec
       targetGameId: game.id,
       sourceUserId: creatorId,
       metadata,
+      signals,
       now,
     }),
     awardCreatorScore({
@@ -350,6 +444,7 @@ export async function awardQualifiedPlay({ game, actorId, sessionId, durationSec
       targetGameId: game.id,
       sourceUserId: playerId,
       metadata,
+      signals,
       now,
     }),
   ]);
@@ -358,6 +453,38 @@ export async function awardQualifiedPlay({ game, actorId, sessionId, durationSec
     ? await updateGamePoints(game.id, { plays: 1, total: creatorScore.cs ?? 0 })
     : null;
   return dualAwardResult({ playerKp, creatorScore, action: "game_play_qualified", pointsForGame: gamePoints });
+}
+
+export async function awardGameCompletion({ game, actorId, completionId, now = new Date(), signals = {} }) {
+  if (!game?.id || !game?.creatorId || !actorId) return { awarded: false, reason: "missing-input" };
+  if (sameUser(game.creatorId, actorId)) return { awarded: false, reason: "self-complete" };
+
+  const creatorId = normalizeUserId(game.creatorId);
+  const playerId = normalizeUserId(actorId);
+  const eventKey = completionId || `${game.id}:${playerId}`;
+  const [playerKp, creatorScore] = await Promise.all([
+    awardPlayerKp({
+      eventId: buildPointEventId("kp-complete", [eventKey]),
+      userId: playerId,
+      action: "game_complete",
+      kp: POINT_VALUES.playerComplete,
+      targetGameId: game.id,
+      sourceUserId: creatorId,
+      signals,
+      now,
+    }),
+    awardCreatorScore({
+      eventId: buildPointEventId("cs-complete", [eventKey]),
+      creatorId,
+      action: "game_complete",
+      cs: POINT_VALUES.creatorComplete,
+      targetGameId: game.id,
+      sourceUserId: playerId,
+      signals,
+      now,
+    }),
+  ]);
+  return dualAwardResult({ playerKp, creatorScore, action: "game_complete" });
 }
 
 export async function awardLike({ game, actorId }) {
@@ -473,6 +600,169 @@ export async function awardFirstGameBonus({ creatorId, gameId }) {
   return dualAwardResult({ playerKp, creatorScore, action: "game_publish" });
 }
 
+export async function awardDailyLogin({ userId, now = new Date(), signals = {} }) {
+  const normalizedUserId = normalizeUserId(userId);
+  return awardPlayerKp({
+    eventId: buildPointEventId("kp-daily-login", [normalizedUserId, dayKey(now)]),
+    userId: normalizedUserId,
+    action: "daily_login",
+    kp: POINT_VALUES.dailyLoginKp,
+    metadata: { day: dayKey(now) },
+    signals,
+    now,
+  });
+}
+
+export async function awardDailyChallenge({ userId, creatorId, challengeId, gameId, now = new Date(), signals = {} }) {
+  if (!userId || !challengeId) return { awarded: false, reason: "missing-input" };
+  const normalizedUserId = normalizeUserId(userId);
+  const normalizedCreatorId = normalizeUserId(creatorId ?? userId);
+  const [playerKp, creatorScore] = await Promise.all([
+    awardPlayerKp({
+      eventId: buildPointEventId("kp-daily-challenge", [challengeId, normalizedUserId, dayKey(now)]),
+      userId: normalizedUserId,
+      action: "daily_challenge",
+      kp: POINT_VALUES.dailyChallengeKp,
+      targetGameId: gameId,
+      sourceUserId: normalizedCreatorId,
+      metadata: { challengeId, day: dayKey(now) },
+      signals,
+      now,
+    }),
+    awardCreatorScore({
+      eventId: buildPointEventId("cs-daily-challenge", [challengeId, normalizedCreatorId, dayKey(now)]),
+      creatorId: normalizedCreatorId,
+      action: "daily_challenge",
+      cs: POINT_VALUES.dailyChallengeCs,
+      targetGameId: gameId,
+      sourceUserId: normalizedUserId,
+      metadata: { challengeId, day: dayKey(now) },
+      signals,
+      now,
+    }),
+  ]);
+  return dualAwardResult({ playerKp, creatorScore, action: "daily_challenge" });
+}
+
+export async function awardRemix({ newCreatorId, originalCreatorId, originalGameId, remixGameId, now = new Date(), signals = {} }) {
+  if (!newCreatorId || !originalCreatorId || !remixGameId) return { awarded: false, reason: "missing-input" };
+  if (sameUser(newCreatorId, originalCreatorId)) return { awarded: false, reason: "self-remix" };
+  const newCreator = normalizeUserId(newCreatorId);
+  const originalCreator = normalizeUserId(originalCreatorId);
+  const remixDay = dayKey(now);
+  const { creatorScoreLedger } = await collections();
+  const remixCount = await creatorScoreLedger.countDocuments({
+    creatorId: newCreator,
+    action: "game_remix_new_creator",
+    day: remixDay,
+  });
+  if (remixCount >= 10) return { awarded: false, reason: "remix-daily-cap" };
+
+  const [newCreatorKp, newCreatorScore, originalCreatorScore] = await Promise.all([
+    awardPlayerKp({
+      eventId: buildPointEventId("kp-remix-new", [remixGameId, newCreator]),
+      userId: newCreator,
+      action: "game_remix_new_creator",
+      kp: POINT_VALUES.remixNewCreatorKp,
+      targetGameId: remixGameId,
+      sourceUserId: originalCreator,
+      metadata: { originalGameId, remixGameId },
+      signals,
+      now,
+    }),
+    awardCreatorScore({
+      eventId: buildPointEventId("cs-remix-new", [remixGameId, newCreator]),
+      creatorId: newCreator,
+      action: "game_remix_new_creator",
+      cs: POINT_VALUES.remixNewCreatorCs,
+      targetGameId: remixGameId,
+      sourceUserId: originalCreator,
+      metadata: { originalGameId, remixGameId },
+      signals,
+      now,
+    }),
+    awardCreatorScore({
+      eventId: buildPointEventId("cs-remix-original", [remixGameId, originalCreator]),
+      creatorId: originalCreator,
+      action: "game_remix_original_creator",
+      cs: POINT_VALUES.remixOriginalCreatorCs,
+      targetGameId: originalGameId,
+      sourceUserId: newCreator,
+      metadata: { originalGameId, remixGameId },
+      signals,
+      now,
+    }),
+  ]);
+
+  return {
+    awarded: Boolean(newCreatorKp.awarded || newCreatorScore.awarded || originalCreatorScore.awarded),
+    playerKp: newCreatorKp,
+    creatorScore: newCreatorScore,
+    originalCreatorScore,
+    kp: newCreatorKp.kp ?? 0,
+    cs: (newCreatorScore.cs ?? 0) + (originalCreatorScore.cs ?? 0),
+    points: (newCreatorScore.cs ?? 0) + (originalCreatorScore.cs ?? 0),
+  };
+}
+
+export async function awardMilestone({ userId, creatorId, gameId, milestone, now = new Date(), signals = {} }) {
+  const config = {
+    trending_daily_top: [POINT_VALUES.trendingDailyTopKp, POINT_VALUES.trendingDailyTopCs],
+    trending_top_100: [POINT_VALUES.trendingTop100Kp, POINT_VALUES.trendingTop100Cs],
+    featured_browser: [POINT_VALUES.featuredKp, POINT_VALUES.featuredCs],
+    genesis_creator_10000_plays: [POINT_VALUES.genesisCreatorKp, POINT_VALUES.genesisCreatorCs],
+  }[milestone];
+  if (!config || !userId || !creatorId) return { awarded: false, reason: "missing-input" };
+  const [kp, cs] = config;
+  const normalizedUserId = normalizeUserId(userId);
+  const normalizedCreatorId = normalizeUserId(creatorId);
+  const [playerKp, creatorScore] = await Promise.all([
+    awardPlayerKp({
+      eventId: buildPointEventId("kp-milestone", [milestone, gameId, normalizedUserId, dayKey(now)]),
+      userId: normalizedUserId,
+      action: milestone,
+      kp,
+      targetGameId: gameId,
+      sourceUserId: normalizedCreatorId,
+      signals,
+      now,
+    }),
+    awardCreatorScore({
+      eventId: buildPointEventId("cs-milestone", [milestone, gameId, normalizedCreatorId, dayKey(now)]),
+      creatorId: normalizedCreatorId,
+      action: milestone,
+      cs,
+      targetGameId: gameId,
+      sourceUserId: normalizedUserId,
+      signals,
+      now,
+    }),
+  ]);
+  if (milestone === "genesis_creator_10000_plays" && (playerKp.awarded || creatorScore.awarded)) {
+    await awardBadge({ userId: normalizedCreatorId, badgeId: "genesis_creator", gameId, now });
+  }
+  return dualAwardResult({ playerKp, creatorScore, action: milestone });
+}
+
+export async function awardBadge({ userId, badgeId, gameId, now = new Date() }) {
+  if (!userId || !badgeId) return { awarded: false, reason: "missing-input" };
+  const { badges } = await collections();
+  const normalizedUserId = normalizeUserId(userId);
+  const result = await badges.updateOne(
+    { userId: normalizedUserId, badgeId },
+    {
+      $setOnInsert: {
+        userId: normalizedUserId,
+        badgeId,
+        gameId: gameId ?? null,
+        awardedAt: now,
+      },
+    },
+    { upsert: true },
+  );
+  return { awarded: Boolean(result.upsertedCount), badgeId };
+}
+
 export async function recordCreatorGamePublished({ creatorId, gameId }) {
   if (!creatorId || !gameId) return { recorded: false, reason: "missing-input" };
   const { creators } = await collections();
@@ -552,6 +842,7 @@ export async function getPointSummary(userId) {
     walletAddress: normalizedUserId,
     kultPoints: Number(balance?.kultPoints ?? 0),
     lifetimePoints: Number(balance?.kultPoints ?? 0),
+    level: kpLevelForPoints(balance?.kultPoints ?? 0),
     updatedAt: balance?.updatedAt ?? null,
   };
 }
@@ -561,6 +852,72 @@ export async function getCreatorScoreSummary(creatorId) {
   if (!normalizedCreatorId) return null;
   const { creatorScoreBalances } = await collections();
   return creatorScoreBalances.findOne({ creatorId: normalizedCreatorId }, { projection: { _id: 0 } });
+}
+
+export async function getPlayerKpLeaderboard({ period = "all-time", limit = 100 } = {}) {
+  const { browserBalances, playerKpLedger } = await collections();
+  const cappedLimit = Math.min(Math.max(Number(limit) || 100, 1), 500);
+  if (period === "weekly") {
+    const week = weekKey(new Date());
+    const rows = await playerKpLedger
+      .find({ week }, { projection: { _id: 0, userId: 1, kpDelta: 1 } })
+      .toArray();
+    const totals = new Map();
+    for (const row of rows) totals.set(row.userId, (totals.get(row.userId) ?? 0) + Number(row.kpDelta ?? 0));
+    return [...totals.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, cappedLimit)
+      .map(([userId, kultPoints], index) => ({ rank: index + 1, userId, walletAddress: userId, kultPoints, level: kpLevelForPoints(kultPoints) }));
+  }
+
+  const cursor = browserBalances.find({}, { projection: { _id: 0, walletAddress: 1, kultPoints: 1 } });
+  const sortedCursor = cursor.sort ? cursor.sort({ kultPoints: -1 }) : cursor;
+  const limitedCursor = sortedCursor.limit ? sortedCursor.limit(cappedLimit) : sortedCursor;
+  const rows = await limitedCursor.toArray();
+  const list = rows ?? [];
+  return list
+    .sort((a, b) => Number(b.kultPoints ?? 0) - Number(a.kultPoints ?? 0))
+    .slice(0, cappedLimit)
+    .map((entry, index) => ({
+      rank: index + 1,
+      userId: entry.walletAddress,
+      walletAddress: entry.walletAddress,
+      kultPoints: Number(entry.kultPoints ?? 0),
+      level: kpLevelForPoints(entry.kultPoints ?? 0),
+    }));
+}
+
+export async function getCreatorScoreLeaderboard({ period = "all-time", limit = 100 } = {}) {
+  const { creatorScoreBalances, creatorScoreLedger } = await collections();
+  const cappedLimit = Math.min(Math.max(Number(limit) || 100, 1), 500);
+  if (period === "weekly") {
+    const week = weekKey(new Date());
+    const rows = await creatorScoreLedger
+      .find({ week }, { projection: { _id: 0, creatorId: 1, csDelta: 1 } })
+      .toArray();
+    const totals = new Map();
+    for (const row of rows) totals.set(row.creatorId, (totals.get(row.creatorId) ?? 0) + Number(row.csDelta ?? 0));
+    return [...totals.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, cappedLimit)
+      .map(([creatorId, creatorScore], index) => ({ rank: index + 1, creatorId, creatorScore, lifetimeScore: creatorScore }));
+  }
+
+  const cursor = creatorScoreBalances.find({}, { projection: { _id: 0 } });
+  const sortedCursor = cursor.sort ? cursor.sort({ lifetimeScore: -1 }) : cursor;
+  const limitedCursor = sortedCursor.limit ? sortedCursor.limit(cappedLimit) : sortedCursor;
+  const rows = await limitedCursor.toArray();
+  const list = rows ?? [];
+  return list
+    .sort((a, b) => Number(b.lifetimeScore ?? b.lifetimePoints ?? 0) - Number(a.lifetimeScore ?? a.lifetimePoints ?? 0))
+    .slice(0, cappedLimit)
+    .map((entry, index) => ({
+      rank: index + 1,
+      creatorId: entry.creatorId,
+      creatorScore: Number(entry.lifetimeScore ?? entry.lifetimePoints ?? 0),
+      lifetimeScore: Number(entry.lifetimeScore ?? entry.lifetimePoints ?? 0),
+      gamesCreated: Number(entry.gamesCreated ?? 0),
+    }));
 }
 
 export function __setPointsTestHarness(harness) {

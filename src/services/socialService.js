@@ -1,6 +1,19 @@
 import { getDatabase, getGameCollection, getGamePackageById } from "./databaseService.js";
 import { putJsonOnZeroG } from "./zeroGStorage.js";
-import { awardFollowCreator, awardLike, awardQualifiedPlay, awardShare, getCreatorScoreSummary } from "./pointsService.js";
+import {
+  awardDailyChallenge,
+  awardDailyLogin,
+  awardFollowCreator,
+  awardGameCompletion,
+  awardLike,
+  awardMilestone,
+  awardQualifiedPlay,
+  awardRemix,
+  awardShare,
+  getCreatorScoreSummary,
+  getPlayerKpLeaderboard,
+  getCreatorScoreLeaderboard,
+} from "./pointsService.js";
 
 const COLLECTIONS = {
   likes: "social_likes",
@@ -394,7 +407,7 @@ export async function recordView(gameId, userId) {
   return { gameId, views: count };
 }
 
-export async function recordQualifiedPlay(gameId, { userId, sessionId, durationSeconds }) {
+export async function recordQualifiedPlay(gameId, { userId, sessionId, durationSeconds, signals }) {
   if (Number(durationSeconds) < 30) {
     return { qualified: false, reason: "duration", points: null };
   }
@@ -407,6 +420,7 @@ export async function recordQualifiedPlay(gameId, { userId, sessionId, durationS
     actorId: userId,
     sessionId,
     durationSeconds,
+    signals,
   });
   if ((points.awarded || points.duplicate) && game.creatorId && game.creatorId !== userId) {
     void notifyUser({
@@ -423,6 +437,40 @@ export async function recordQualifiedPlay(gameId, { userId, sessionId, durationS
     qualified: Boolean(points.awarded || points.duplicate),
     points,
   };
+}
+
+export async function recordGameCompletion(gameId, { userId, completionId, signals }) {
+  const game = await getGamePackageById(gameId).catch(() => null);
+  if (!game) return { completed: false, reason: "game-not-found", points: null };
+  const points = await awardGameCompletion({ game, actorId: userId, completionId, signals });
+  return { completed: Boolean(points.awarded || points.duplicate), points };
+}
+
+export async function recordDailyLogin({ userId, signals }) {
+  const points = await awardDailyLogin({ userId, signals });
+  return { rewarded: Boolean(points.awarded || points.duplicate), points };
+}
+
+export async function recordDailyChallenge({ userId, creatorId, challengeId, gameId, signals }) {
+  const points = await awardDailyChallenge({ userId, creatorId, challengeId, gameId, signals });
+  return { rewarded: Boolean(points.awarded || points.duplicate), points };
+}
+
+export async function recordRemix({ newCreatorId, originalCreatorId, originalGameId, remixGameId, signals }) {
+  const points = await awardRemix({ newCreatorId, originalCreatorId, originalGameId, remixGameId, signals });
+  return { rewarded: Boolean(points.awarded), points };
+}
+
+export async function recordMilestone({ userId, creatorId, gameId, milestone, signals }) {
+  const points = await awardMilestone({ userId, creatorId, gameId, milestone, signals });
+  return { rewarded: Boolean(points.awarded || points.duplicate), points };
+}
+
+export async function getEconomyLeaderboard({ economy, period, limit }) {
+  if (economy === "kp" || economy === "player") {
+    return { economy: "kp", period, entries: await getPlayerKpLeaderboard({ period, limit }) };
+  }
+  return { economy: "cs", period, entries: await getCreatorScoreLeaderboard({ period, limit }) };
 }
 
 export async function getViewCount(gameId) {
