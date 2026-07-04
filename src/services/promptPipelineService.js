@@ -393,7 +393,35 @@ export async function generateGameFromPrompt({
   };
 
   let plan = null;
-  const planPromise = includePlan
+
+  // Pure-agent builds have no template seed, so the coding model works from the
+  // raw prompt alone. Give it a structured build plan instead: await the
+  // orchestrator BEFORE code generation (sequential on purpose) and inject its
+  // output into the coding prompt. Kept tight (800 tokens, 45s, no retries) so
+  // a slow orchestrator can't stall the build; on failure we fall back to the
+  // raw prompt, exactly like before.
+  let pureAgentPlan = null;
+  if (strategy === "pure-agent" && includeCode) {
+    try {
+      pureAgentPlan = await createOrchestrationPlan({
+        prompt,
+        context: {
+          ...(context ?? {}),
+          selectedTemplate: selection,
+          gamePackage: game
+        },
+        maxTokens: 800,
+        timeoutMs: 45000,
+        retries: 0
+      });
+      plan = pureAgentPlan;
+      game.generation.planModel = pureAgentPlan.model;
+    } catch (error) {
+      warnings.push(`Orchestrator plan skipped: ${error.message}`);
+    }
+  }
+
+  const planPromise = includePlan && !pureAgentPlan
     ? createOrchestrationPlan({
         prompt,
         context: {
@@ -411,7 +439,8 @@ export async function generateGameFromPrompt({
         gamePackage: game,
         request: prompt,
         refinementLevel: selection.customization,
-        strategy
+        strategy,
+        plan: pureAgentPlan?.content ?? null
       })
     : null;
   const assetsPromise = includeAssets
@@ -433,7 +462,7 @@ export async function generateGameFromPrompt({
     assetsPromise
   ]);
 
-  if (includePlan) {
+  if (includePlan && !pureAgentPlan) {
     if (planResult.status === "fulfilled") {
       plan = planResult.value;
       game.generation.planModel = plan.model;

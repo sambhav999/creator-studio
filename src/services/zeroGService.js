@@ -219,11 +219,13 @@ export async function callZeroGChat({
   }
 }
 
-export async function createOrchestrationPlan({ prompt, context }) {
+export async function createOrchestrationPlan({ prompt, context, maxTokens = 1800, timeoutMs = 120000, retries = 2 }) {
   return callZeroGChat({
     model: zeroGModels.orchestrator,
     temperature: 0.25,
-    maxTokens: 1800,
+    maxTokens,
+    timeoutMs,
+    retries,
     messages: [
       {
         role: "system",

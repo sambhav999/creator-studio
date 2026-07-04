@@ -2,7 +2,7 @@ import { getReferenceGame } from "../data/referenceGames.js";
 import { runtimeSmokeTest } from "./gameSmokeTest.js";
 import { callZeroGChat, zeroGModels } from "./zeroGService.js";
 
-function buildPromptBundle({ gamePackage, request }) {
+function buildPromptBundle({ gamePackage, request, plan }) {
   return {
     system: [
       "You are an expert browser game developer.",
@@ -29,6 +29,12 @@ function buildPromptBundle({ gamePackage, request }) {
       `Colors: ${(gamePackage.visuals?.colors ?? []).join(", ")}`,
       `Assets: ${gamePackage.visuals?.assets}`,
       `Creator request: ${request || gamePackage.customization?.prompt || "Create a polished playable version of this game."}`,
+      ...(plan
+        ? [
+            "Build plan from the orchestrator — implement the game following its intent and steps, but the technical rules above always win on any conflict:",
+            plan
+          ]
+        : []),
       "Return only the complete JavaScript module. It must run immediately in a Vite browser project."
     ].join("\n")
   };
@@ -443,7 +449,7 @@ async function ensureRuntimeRuns(generated, promptBundle, gamePackage, reference
 }
 
 export async function createRefinementBundle(
-  { gamePackage, request, refinementLevel, strategy, baseCode },
+  { gamePackage, request, refinementLevel, strategy, baseCode, plan },
   { onProgress } = {}
 ) {
   if (!gamePackage) {
@@ -452,7 +458,13 @@ export async function createRefinementBundle(
     throw error;
   }
 
-  const promptBundle = buildPromptBundle({ gamePackage, request });
+  // The orchestrator plan only guides from-scratch pure-agent builds; seeded
+  // template edits already have the reference code as their spec.
+  const promptBundle = buildPromptBundle({
+    gamePackage,
+    request,
+    plan: strategy === "pure-agent" && !baseCode ? plan : null
+  });
   // When the caller supplies the game's current code (post-creation editing),
   // that code IS the seed — the agent applies the requested change to it.
   const reference = baseCode
