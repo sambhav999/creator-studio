@@ -59,7 +59,7 @@ const commentDeleteSchema = z.object({
 const favoriteSchema = gameIdSchema.merge(userIdSchema);
 
 const shareSchema = gameIdSchema.merge(userIdSchema).extend({
-  platform: z.enum(["link", "twitter", "discord", "telegram", "whatsapp", "embed", "instagram", "email"]).optional(),
+  platform: z.enum(["link", "twitter", "discord", "telegram", "whatsapp", "embed", "instagram", "email", "youtube"]).optional(),
 }).strict();
 
 const paginationSchema = z.object({

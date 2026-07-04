@@ -119,6 +119,10 @@ function weekKey(date) {
   return `${thursday.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
 }
 
+function monthKey(date) {
+  return date.toISOString().slice(0, 7);
+}
+
 function periodIncrements(field, amount, now) {
   const day = dayKey(now);
   const week = weekKey(now);
@@ -854,70 +858,131 @@ export async function getCreatorScoreSummary(creatorId) {
   return creatorScoreBalances.findOne({ creatorId: normalizedCreatorId }, { projection: { _id: 0 } });
 }
 
-export async function getPlayerKpLeaderboard({ period = "all-time", limit = 100 } = {}) {
-  const { browserBalances, playerKpLedger } = await collections();
-  const cappedLimit = Math.min(Math.max(Number(limit) || 100, 1), 500);
-  if (period === "weekly") {
-    const week = weekKey(new Date());
-    const rows = await playerKpLedger
-      .find({ week }, { projection: { _id: 0, userId: 1, kpDelta: 1 } })
-      .toArray();
-    const totals = new Map();
-    for (const row of rows) totals.set(row.userId, (totals.get(row.userId) ?? 0) + Number(row.kpDelta ?? 0));
-    return [...totals.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, cappedLimit)
-      .map(([userId, kultPoints], index) => ({ rank: index + 1, userId, walletAddress: userId, kultPoints, level: kpLevelForPoints(kultPoints) }));
-  }
-
-  const cursor = browserBalances.find({}, { projection: { _id: 0, walletAddress: 1, kultPoints: 1 } });
-  const sortedCursor = cursor.sort ? cursor.sort({ kultPoints: -1 }) : cursor;
-  const limitedCursor = sortedCursor.limit ? sortedCursor.limit(cappedLimit) : sortedCursor;
-  const rows = await limitedCursor.toArray();
-  const list = rows ?? [];
-  return list
-    .sort((a, b) => Number(b.kultPoints ?? 0) - Number(a.kultPoints ?? 0))
-    .slice(0, cappedLimit)
-    .map((entry, index) => ({
-      rank: index + 1,
-      userId: entry.walletAddress,
-      walletAddress: entry.walletAddress,
-      kultPoints: Number(entry.kultPoints ?? 0),
-      level: kpLevelForPoints(entry.kultPoints ?? 0),
-    }));
+function displayNameForId(id) {
+  const value = String(id || "").trim();
+  if (!value) return "Unknown";
+  if (/^0x[a-f0-9]{40}$/i.test(value)) return `${value.slice(0, 6)}...${value.slice(-4)}`;
+  return value.startsWith("@") ? value : `@${value}`;
 }
 
-export async function getCreatorScoreLeaderboard({ period = "all-time", limit = 100 } = {}) {
-  const { creatorScoreBalances, creatorScoreLedger } = await collections();
-  const cappedLimit = Math.min(Math.max(Number(limit) || 100, 1), 500);
-  if (period === "weekly") {
-    const week = weekKey(new Date());
-    const rows = await creatorScoreLedger
-      .find({ week }, { projection: { _id: 0, creatorId: 1, csDelta: 1 } })
-      .toArray();
-    const totals = new Map();
-    for (const row of rows) totals.set(row.creatorId, (totals.get(row.creatorId) ?? 0) + Number(row.csDelta ?? 0));
-    return [...totals.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, cappedLimit)
-      .map(([creatorId, creatorScore], index) => ({ rank: index + 1, creatorId, creatorScore, lifetimeScore: creatorScore }));
-  }
+function rankRows(rows, scoreKey, limit) {
+  return rows
+    .filter((row) => Number(row[scoreKey] ?? 0) > 0)
+    .sort((first, second) => {
+      const scoreDiff = Number(second[scoreKey] ?? 0) - Number(first[scoreKey] ?? 0);
+      if (scoreDiff !== 0) return scoreDiff;
+      return String(first.id).localeCompare(String(second.id));
+    })
+    .slice(0, limit)
+    .map((row, index) => ({ rank: index + 1, ...row }));
+}
 
-  const cursor = creatorScoreBalances.find({}, { projection: { _id: 0 } });
-  const sortedCursor = cursor.sort ? cursor.sort({ lifetimeScore: -1 }) : cursor;
-  const limitedCursor = sortedCursor.limit ? sortedCursor.limit(cappedLimit) : sortedCursor;
-  const rows = await limitedCursor.toArray();
-  const list = rows ?? [];
-  return list
-    .sort((a, b) => Number(b.lifetimeScore ?? b.lifetimePoints ?? 0) - Number(a.lifetimeScore ?? a.lifetimePoints ?? 0))
-    .slice(0, cappedLimit)
-    .map((entry, index) => ({
-      rank: index + 1,
-      creatorId: entry.creatorId,
-      creatorScore: Number(entry.lifetimeScore ?? entry.lifetimePoints ?? 0),
-      lifetimeScore: Number(entry.lifetimeScore ?? entry.lifetimePoints ?? 0),
-      gamesCreated: Number(entry.gamesCreated ?? 0),
-    }));
+function rangeMatchesLedgerEvent(event, range, now) {
+  if (range === "weekly") return event.week === weekKey(now);
+  if (range === "monthly") return String(event.day || "").startsWith(monthKey(now));
+  return true;
+}
+
+function aggregateLedgerRows(events, idKey, deltaKey, scoreKey, range, now) {
+  const totals = new Map();
+  for (const event of events) {
+    if (!rangeMatchesLedgerEvent(event, range, now)) continue;
+    const id = normalizeUserId(event[idKey]);
+    if (!id) continue;
+    totals.set(id, Number(totals.get(id) ?? 0) + Number(event[deltaKey] ?? 0));
+  }
+  return [...totals.entries()].map(([id, score]) => ({ id, [scoreKey]: score }));
+}
+
+async function creatorNamesById(creatorIds, creators) {
+  const profiles = creatorIds.length
+    ? await creators
+      .find({ creatorId: { $in: creatorIds } }, { projection: { _id: 0, creatorId: 1, username: 1, displayName: 1, name: 1 } })
+      .toArray()
+    : [];
+  return new Map(profiles.map((profile) => [normalizeUserId(profile.creatorId), profile]));
+}
+
+export async function getCreatorScoreLeaderboard({ limit = 100, range = "allTime", now = new Date() } = {}) {
+  const { creatorScoreBalances, creators } = await collections();
+  const { creatorScoreLedger } = await collections();
+  const sourceRows = range === "allTime"
+    ? await creatorScoreBalances
+      .find({ lifetimeScore: { $gt: 0 } }, { projection: { _id: 0 } })
+      .toArray()
+    : aggregateLedgerRows(
+      await creatorScoreLedger.find(range === "weekly" ? { week: weekKey(now) } : {}, { projection: { _id: 0 } }).toArray(),
+      "creatorId",
+      "csDelta",
+      "creatorScore",
+      range,
+      now,
+    );
+  const creatorIds = sourceRows.map((row) => row.creatorId ?? row.id).filter(Boolean);
+  const profilesById = await creatorNamesById(creatorIds, creators);
+
+  const rows = sourceRows.map((balance) => {
+    const creatorId = normalizeUserId(balance.creatorId ?? balance.id);
+    const profile = profilesById.get(creatorId);
+    const name = profile?.username || profile?.displayName || profile?.name || displayNameForId(creatorId);
+    const score = Number(balance.creatorScore ?? balance.lifetimeScore ?? balance.lifetimePoints ?? 0);
+    return {
+      id: creatorId,
+      creatorId,
+      name,
+      creatorScore: score,
+      lifetimeScore: Number(balance.lifetimeScore ?? balance.lifetimePoints ?? score),
+      dailyScore: balance.dailyScore ?? {},
+      weeklyScore: balance.weeklyScore ?? {},
+      currentDay: balance.currentDay ?? null,
+      currentWeek: balance.currentWeek ?? null,
+      updatedAt: balance.updatedAt ?? null,
+    };
+  });
+
+  return {
+    kind: "creator-score",
+    metric: "creatorScore",
+    range,
+    entries: rankRows(rows, "creatorScore", limit),
+  };
+}
+
+export async function getKultPointsLeaderboard({ limit = 100, range = "allTime", now = new Date() } = {}) {
+  const { browserBalances, playerKpLedger } = await collections();
+  const balances = range === "allTime"
+    ? await browserBalances
+      .find({ kultPoints: { $gt: 0 } }, { projection: { _id: 0 } })
+      .toArray()
+    : aggregateLedgerRows(
+      await playerKpLedger.find(range === "weekly" ? { week: weekKey(now) } : {}, { projection: { _id: 0 } }).toArray(),
+      "userId",
+      "kpDelta",
+      "kultPoints",
+      range,
+      now,
+    );
+  const rows = balances.map((balance) => {
+    const walletAddress = normalizeUserId(balance.walletAddress ?? balance.id);
+    const points = Number(balance.kultPoints ?? 0);
+    return {
+      id: walletAddress,
+      userId: walletAddress,
+      walletAddress,
+      name: balance.username || balance.displayName || balance.name || displayNameForId(walletAddress),
+      kultPoints: points,
+      lifetimePoints: points,
+      level: kpLevelForPoints(points),
+      updatedAt: balance.updatedAt ?? null,
+    };
+  });
+
+  return {
+    kind: "kult-points",
+    metric: "kultPoints",
+    range,
+    entries: rankRows(rows, "kultPoints", limit),
+  };
 }
 
 export function __setPointsTestHarness(harness) {

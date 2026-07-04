@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { getLeaderboard, submitScore } from "../services/leaderboardService.js";
+import { getCreatorScoreLeaderboard, getKultPointsLeaderboard } from "../services/pointsService.js";
 import { logActivity, getGameTitle } from "../services/activityService.js";
 
 const gameParamsSchema = z.object({
@@ -15,6 +16,31 @@ const scoreSchema = z.object({
   username: z.string().min(1).max(50),
   score: z.coerce.number().finite().nonnegative(),
 }).strict();
+
+const aggregateLeaderboardQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(500).default(100),
+  range: z.enum(["weekly", "monthly", "allTime"]).default("allTime"),
+}).strict();
+
+export async function handleGetCreatorScoreLeaderboard(request, response, next) {
+  try {
+    const { limit, range } = aggregateLeaderboardQuerySchema.parse(request.query);
+    const leaderboard = await getCreatorScoreLeaderboard({ limit, range });
+    response.json(leaderboard);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function handleGetKultPointsLeaderboard(request, response, next) {
+  try {
+    const { limit, range } = aggregateLeaderboardQuerySchema.parse(request.query);
+    const leaderboard = await getKultPointsLeaderboard({ limit, range });
+    response.json(leaderboard);
+  } catch (error) {
+    next(error);
+  }
+}
 
 export async function handleGetLeaderboard(request, response, next) {
   try {

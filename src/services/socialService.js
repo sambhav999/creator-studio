@@ -11,8 +11,8 @@ import {
   awardRemix,
   awardShare,
   getCreatorScoreSummary,
-  getPlayerKpLeaderboard,
   getCreatorScoreLeaderboard,
+  getKultPointsLeaderboard,
 } from "./pointsService.js";
 
 const COLLECTIONS = {
@@ -467,10 +467,13 @@ export async function recordMilestone({ userId, creatorId, gameId, milestone, si
 }
 
 export async function getEconomyLeaderboard({ economy, period, limit }) {
+  const range = period === "weekly" ? "weekly" : period === "monthly" ? "monthly" : "allTime";
   if (economy === "kp" || economy === "player") {
-    return { economy: "kp", period, entries: await getPlayerKpLeaderboard({ period, limit }) };
+    const leaderboard = await getKultPointsLeaderboard({ limit, range });
+    return { economy: "kp", period, entries: leaderboard.entries };
   }
-  return { economy: "cs", period, entries: await getCreatorScoreLeaderboard({ period, limit }) };
+  const leaderboard = await getCreatorScoreLeaderboard({ limit, range });
+  return { economy: "cs", period, entries: leaderboard.entries };
 }
 
 export async function getViewCount(gameId) {
