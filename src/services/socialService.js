@@ -13,6 +13,7 @@ import {
   getCreatorScoreSummary,
   getCreatorScoreLeaderboard,
   getKultPointsLeaderboard,
+  getPointSummary,
 } from "./pointsService.js";
 
 const COLLECTIONS = {
