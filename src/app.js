@@ -101,5 +101,6 @@ const setupRoutes = (prefix) => {
 
 setupRoutes("/api");
 setupRoutes("");
+setupRoutes("/studio-backend/api");
 
 app.use(errorHandler);
