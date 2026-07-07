@@ -12,6 +12,7 @@ import {
   handleGetShareCount,
   handleGetSocialStats,
   handleGetUserActivities,
+  handleGetRecentActivities,
   handleGetUserLikes,
   handleRecordView,
   handleGetViewCount,
@@ -25,12 +26,14 @@ import {
   handleGetFollowStatus,
   handleGetFollowing,
   handleGetCreatorStats,
+  handleUpdateProfile,
   handleGetPointSummary,
   handleGetEconomyLeaderboard,
   handleGetTopViewed,
   handleGetDailyChallenges,
   handleGetAchievements,
   handleGetNotifications,
+  handleCreateNotification,
   handleMarkNotificationsRead,
 } from "../controllers/socialController.js";
 
@@ -59,6 +62,7 @@ socialRouter.post("/shares", handleRecordShare);
 socialRouter.get("/shares/:gameId", handleGetShareCount);
 
 // User activities
+socialRouter.get("/activity/recent", handleGetRecentActivities);
 socialRouter.get("/activity/user/:userId", handleGetUserActivities);
 
 // Views (plays)
@@ -80,10 +84,12 @@ socialRouter.get("/follows/user/:userId", handleGetFollowing);
 socialRouter.get("/follows/:creatorId", handleGetFollowStatus);
 
 // Creator profile stats (real numbers)
+socialRouter.post("/profile", handleUpdateProfile);
 socialRouter.get("/creator-stats/:creatorId", handleGetCreatorStats);
 socialRouter.get("/points/:userId", handleGetPointSummary);
 socialRouter.get("/economy-leaderboard", handleGetEconomyLeaderboard);
 socialRouter.get("/daily-challenges/:userId", handleGetDailyChallenges);
 socialRouter.get("/achievements/:userId", handleGetAchievements);
 socialRouter.get("/notifications/:userId", handleGetNotifications);
+socialRouter.post("/notifications", handleCreateNotification);
 socialRouter.post("/notifications/:userId/read", handleMarkNotificationsRead);

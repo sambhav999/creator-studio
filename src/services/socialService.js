@@ -80,6 +80,10 @@ async function notifyUser({ userId, type, title, body, gameId = null, actorId = 
   return stored;
 }
 
+export async function createUserNotification(input) {
+  return notifyUser(input);
+}
+
 async function getCollection(name) {
   try {
     const db = await getDatabase();
@@ -175,6 +179,18 @@ export async function addComment(gameId, userId, username, text) {
     const result = await col.insertOne(comment);
     comment._id = result.insertedId;
     const count = await col.countDocuments({ gameId });
+    const game = await getGamePackageById(gameId).catch(() => null);
+    if (game?.creatorId && game.creatorId !== userId) {
+      void notifyUser({
+        userId: game.creatorId,
+        type: "comment",
+        title: "New comment on your game",
+        body: `${username || "Someone"} commented on "${game.title || "your game"}".`,
+        gameId,
+        actorId: userId,
+        metadata: { commentId: String(comment._id) },
+      }).catch(() => null);
+    }
     return { comment, count };
   }
 
@@ -183,6 +199,18 @@ export async function addComment(gameId, userId, username, text) {
   const arr = memoryStore.comments.get(gameId);
   comment._id = `mem_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   arr.push(comment);
+  const game = await getGamePackageById(gameId).catch(() => null);
+  if (game?.creatorId && game.creatorId !== userId) {
+    void notifyUser({
+      userId: game.creatorId,
+      type: "comment",
+      title: "New comment on your game",
+      body: `${username || "Someone"} commented on "${game.title || "your game"}".`,
+      gameId,
+      actorId: userId,
+      metadata: { commentId: String(comment._id) },
+    }).catch(() => null);
+  }
   return { comment, count: arr.length };
 }
 

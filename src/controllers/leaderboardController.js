@@ -18,7 +18,7 @@ const scoreSchema = z.object({
 }).strict();
 
 const aggregateLeaderboardQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).max(500).default(100),
+  limit: z.coerce.number().int().min(1).max(1000).default(100),
   range: z.enum(["weekly", "monthly", "allTime"]).default("allTime"),
 }).strict();
 

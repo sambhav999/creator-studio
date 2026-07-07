@@ -836,6 +836,35 @@ export async function awardReferralPlay({ referrerId, referredId, attributionId,
   };
 }
 
+/**
+ * Persists the user's chosen display name so leaderboards (and anything else
+ * reading the creators/balances docs) show it instead of the wallet address.
+ */
+export async function setProfileUsername({ userId, username }) {
+  const normalizedUserId = normalizeUserId(userId);
+  const name = String(username || "").trim().slice(0, 32);
+  if (!normalizedUserId || !name) {
+    const error = new Error("userId and username are required");
+    error.status = 400;
+    throw error;
+  }
+  const { creators, browserBalances } = await collections();
+  const now = new Date();
+  await Promise.all([
+    creators.updateOne(
+      { creatorId: normalizedUserId },
+      { $set: { creatorId: normalizedUserId, username: name, updatedAt: now }, $setOnInsert: { createdAt: now } },
+      { upsert: true },
+    ),
+    browserBalances.updateOne(
+      { walletAddress: normalizedUserId },
+      { $set: { walletAddress: normalizedUserId, username: name, updatedAt: now }, $setOnInsert: { createdAt: now, kultPoints: 0 } },
+      { upsert: true },
+    ),
+  ]);
+  return { userId: normalizedUserId, username: name };
+}
+
 export async function getPointSummary(userId) {
   const normalizedUserId = normalizeUserId(userId);
   if (!normalizedUserId) return null;
@@ -907,8 +936,12 @@ export async function getCreatorScoreLeaderboard({ limit = 100, range = "allTime
   const { creatorScoreBalances, creators } = await collections();
   const { creatorScoreLedger } = await collections();
   const sourceRows = range === "allTime"
+    // Sort + limit pushed to Mongo: rank only needs the top N, not every
+    // balance document shipped to Node. Secondary key keeps ties deterministic.
     ? await creatorScoreBalances
       .find({ lifetimeScore: { $gt: 0 } }, { projection: { _id: 0 } })
+      .sort({ lifetimeScore: -1 })
+      .limit(limit)
       .toArray()
     : aggregateLedgerRows(
       await creatorScoreLedger.find(range === "weekly" ? { week: weekKey(now) } : {}, { projection: { _id: 0 } }).toArray(),
@@ -951,8 +984,15 @@ export async function getCreatorScoreLeaderboard({ limit = 100, range = "allTime
 export async function getKultPointsLeaderboard({ limit = 100, range = "allTime", now = new Date() } = {}) {
   const { browserBalances, playerKpLedger } = await collections();
   const balances = range === "allTime"
+    // Uses the kultPoints:-1 index — the collection holds 180k+ wallets and
+    // fetching them all to sort in JS took ~13s per request.
+    // Single-key sort so the kultPoints:-1 index is used directly (a compound
+    // sort would force an in-memory sort of the full collection). rankRows
+    // applies the deterministic tie-break on the fetched rows afterwards.
     ? await browserBalances
       .find({ kultPoints: { $gt: 0 } }, { projection: { _id: 0 } })
+      .sort({ kultPoints: -1 })
+      .limit(limit)
       .toArray()
     : aggregateLedgerRows(
       await playerKpLedger.find(range === "weekly" ? { week: weekKey(now) } : {}, { projection: { _id: 0 } }).toArray(),
@@ -962,6 +1002,17 @@ export async function getKultPointsLeaderboard({ limit = 100, range = "allTime",
       range,
       now,
     );
+  // Ledger-aggregated rows (weekly/monthly) carry no username — pull the
+  // stored display names from the balance docs so names show in every range.
+  let usernameById = new Map();
+  if (range !== "allTime" && balances.length) {
+    const ids = balances.map((balance) => normalizeUserId(balance.walletAddress ?? balance.id)).filter(Boolean);
+    const profiles = await browserBalances
+      .find({ walletAddress: { $in: ids }, username: { $exists: true } }, { projection: { _id: 0, walletAddress: 1, username: 1 } })
+      .toArray();
+    usernameById = new Map(profiles.map((profile) => [profile.walletAddress, profile.username]));
+  }
+
   const rows = balances.map((balance) => {
     const walletAddress = normalizeUserId(balance.walletAddress ?? balance.id);
     const points = Number(balance.kultPoints ?? 0);
@@ -969,7 +1020,8 @@ export async function getKultPointsLeaderboard({ limit = 100, range = "allTime",
       id: walletAddress,
       userId: walletAddress,
       walletAddress,
-      name: balance.username || balance.displayName || balance.name || displayNameForId(walletAddress),
+      name: balance.username || balance.displayName || balance.name
+        || usernameById.get(walletAddress) || displayNameForId(walletAddress),
       kultPoints: points,
       lifetimePoints: points,
       level: kpLevelForPoints(points),

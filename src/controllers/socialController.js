@@ -24,6 +24,7 @@ import {
   getAchievements,
   getNotifications,
   markNotificationsRead,
+  createUserNotification,
   recordGameCompletion,
   recordDailyLogin,
   recordDailyChallenge,
@@ -31,8 +32,8 @@ import {
   recordMilestone,
   getEconomyLeaderboard,
 } from "../services/socialService.js";
-import { logActivity, getGameTitle, getUserActivities } from "../services/activityService.js";
-import { getPointSummary } from "../services/pointsService.js";
+import { logActivity, getGameTitle, getUserActivities, getRecentActivities } from "../services/activityService.js";
+import { getPointSummary, setProfileUsername } from "../services/pointsService.js";
 
 // ─── Schemas ───────────────────────────────────────────────────────────────
 
@@ -261,6 +262,18 @@ export async function handleGetUserActivities(req, res, next) {
   }
 }
 
+export async function handleGetRecentActivities(req, res, next) {
+  try {
+    const { limit } = z.object({
+      limit: z.coerce.number().int().min(1).max(100).default(50),
+    }).parse(req.query);
+    const activities = await getRecentActivities(limit);
+    res.json(activities);
+  } catch (error) {
+    next(error);
+  }
+}
+
 export async function handleGetUserLikes(req, res, next) {
   try {
     const { userId } = userIdSchema.parse(req.params);
@@ -471,6 +484,21 @@ export async function handleGetCreatorStats(req, res, next) {
   }
 }
 
+const profileSchema = z.object({
+  userId: z.string().min(1),
+  username: z.string().min(1).max(32),
+}).strict();
+
+export async function handleUpdateProfile(req, res, next) {
+  try {
+    const { userId, username } = profileSchema.parse(req.body);
+    const result = await setProfileUsername({ userId, username });
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
 export async function handleGetPointSummary(req, res, next) {
   try {
     const { userId } = userIdSchema.parse(req.params);
@@ -532,11 +560,31 @@ const notificationQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).optional().default(50),
 }).strict();
 
+const notificationCreateSchema = z.object({
+  userId: z.string().min(1),
+  type: z.string().min(1).max(64),
+  title: z.string().min(1).max(120),
+  body: z.string().min(1).max(500),
+  gameId: z.string().min(1).nullable().optional(),
+  actorId: z.string().min(1).nullable().optional(),
+  metadata: z.record(z.any()).optional(),
+}).strict();
+
 export async function handleGetNotifications(req, res, next) {
   try {
     const { userId } = userIdSchema.parse(req.params);
     const query = notificationQuerySchema.parse(req.query);
     res.json(await getNotifications(userId, query));
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function handleCreateNotification(req, res, next) {
+  try {
+    const input = notificationCreateSchema.parse(req.body);
+    const notification = await createUserNotification(input);
+    res.status(201).json({ notification });
   } catch (error) {
     next(error);
   }

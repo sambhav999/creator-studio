@@ -72,6 +72,15 @@ export async function getUserActivities(userId, limit = 50) {
   return memoryActivities.filter(a => a.userId === userId).slice(0, limit);
 }
 
+export async function getRecentActivities(limit = 50) {
+  const safeLimit = Math.max(1, Math.min(Number(limit) || 50, 100));
+  const col = await getCollection();
+  if (col) {
+    return col.find({}).sort({ timestamp: -1 }).limit(safeLimit).toArray();
+  }
+  return memoryActivities.slice(0, safeLimit);
+}
+
 export async function getGameTitle(gameId) {
   if (!gameId) return null;
   // If it's a pre-built template
