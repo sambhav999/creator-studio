@@ -5,6 +5,7 @@ import {
   exportGameCode,
   featureGameInBrowser,
   generateGame,
+  checkGenerationAccess,
   listBrowserFeaturedGames,
   listGames,
   publishGame,
@@ -21,6 +22,7 @@ export const gameRouter = Router();
 
 gameRouter.get("/list", optionalAuth, listGames);
 gameRouter.get("/browser-featured", listBrowserFeaturedGames);
+gameRouter.get("/generation-access", requireAuth, checkGenerationAccess);
 gameRouter.post("/create", requireAuth, createGame);
 gameRouter.post("/generate-from-prompt", requireAuth, generateGame);
 gameRouter.post("/refine", requireAuth, refineGame);

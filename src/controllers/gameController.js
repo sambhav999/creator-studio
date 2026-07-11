@@ -16,6 +16,7 @@ import { logActivity } from "../services/activityService.js";
 import { putBufferOnZeroG } from "../services/zeroGStorage.js";
 import { awardFirstGameBonus, recordCreatorGamePublished } from "../services/pointsService.js";
 import { notifyFollowersOfPublish } from "../services/socialService.js";
+import { assertGenerationAccess, generationAccessMetadata } from "../services/generationAccessService.js";
 
 const createSchema = z.object({
   templateId: z.string().min(1),
@@ -24,6 +25,7 @@ const createSchema = z.object({
   difficulty: z.enum(["easy", "normal", "hard", "insane"]).optional(),
   customization: z.enum(["light", "medium", "heavy"]).optional(),
   extra: z.enum(["none", "powerups", "leaderboard", "boss"]).optional(),
+  paymentTxHash: z.string().min(1).optional(),
   userId: z.string().optional()
 }).strict();
 
@@ -38,6 +40,7 @@ const promptGenerateSchema = z.object({
   includeCode: z.boolean().optional(),
   includeAssets: z.boolean().optional(),
   strategy: z.enum(["hybrid", "pure-agent"]).optional(),
+  paymentTxHash: z.string().min(1).optional(),
   userId: z.string().optional()
 }).strict();
 
@@ -89,6 +92,22 @@ export async function listBrowserFeaturedGames(_request, response, next) {
           (Date.parse(b.browserFeature?.featuredAt ?? "") || 0) -
           (Date.parse(a.browserFeature?.featuredAt ?? "") || 0)
         )
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function checkGenerationAccess(request, response, next) {
+  try {
+    const creatorId = request.auth?.userId ?? "anonymous";
+    const generationAccess = await assertGenerationAccess({
+      creatorId,
+      paymentTxHash: request.query.paymentTxHash
+    });
+    response.json({
+      ok: true,
+      access: generationAccessMetadata(generationAccess)
     });
   } catch (error) {
     next(error);
@@ -339,8 +358,14 @@ export async function deleteGame(request, response, next) {
 export async function createGame(request, response, next) {
   try {
     const input = createSchema.parse(request.body);
+    const creatorId = request.auth?.userId ?? "anonymous";
+    const generationAccess = await assertGenerationAccess({
+      creatorId,
+      paymentTxHash: input.paymentTxHash
+    });
     const game = createGamePackage(input);
-    game.creatorId = request.auth?.userId ?? "anonymous";
+    game.creatorId = creatorId;
+    game.generationAccess = generationAccessMetadata(generationAccess);
     const persistence = await saveGamePackage(game);
     if (game.creatorId) {
       await logActivity({
@@ -360,9 +385,15 @@ export async function createGame(request, response, next) {
 export async function generateGame(request, response, next) {
   try {
     const input = promptGenerateSchema.parse(request.body);
+    const creatorId = request.auth?.userId ?? "anonymous";
+    const generationAccess = await assertGenerationAccess({
+      creatorId,
+      paymentTxHash: input.paymentTxHash
+    });
     const result = await generateGameFromPrompt(input);
     // Attribute the game to its creator so follows and profile stats are real.
-    result.game.creatorId = request.auth?.userId ?? "anonymous";
+    result.game.creatorId = creatorId;
+    result.game.generationAccess = generationAccessMetadata(generationAccess);
     result.game.publish = {
       ...(result.game.publish ?? {}),
       published: false,

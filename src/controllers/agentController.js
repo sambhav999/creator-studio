@@ -6,6 +6,7 @@ import {
 } from "../services/databaseService.js";
 import { getJob, serializeJob, startJob } from "../services/jobService.js";
 import { createRefinementBundle } from "../services/refinementService.js";
+import { assertGenerationAccess, generationAccessMetadata } from "../services/generationAccessService.js";
 import {
   analyzeReferenceImage,
   createOrchestrationPlan,
@@ -25,6 +26,7 @@ const codeSchema = z.object({
   request: z.string().optional(),
   refinementLevel: z.string().optional(),
   strategy: z.string().optional(),
+  paymentTxHash: z.string().min(1).optional(),
   // Current build source — when present, the agent edits this code instead of
   // generating from a template seed (post-creation "wish" edits).
   baseCode: z.string().optional()
@@ -76,6 +78,15 @@ export async function generateCode(request, response, next) {
   try {
     const input = codeSchema.parse(request.body);
     const requesterId = request.auth?.userId ?? null;
+    const creatorId = requesterId ?? "anonymous";
+    let generationAccess = null;
+    const existingGame = input.gamePackage?.id ? await getGamePackageById(input.gamePackage.id) : null;
+    if (!existingGame) {
+      generationAccess = await assertGenerationAccess({
+        creatorId,
+        paymentTxHash: input.paymentTxHash
+      });
+    }
     const job = startJob("code-generation", async (updateProgress) => {
       const refinement = await createRefinementBundle(input, { onProgress: updateProgress });
       // Persist the build onto the saved game: without this, the generated
@@ -99,9 +110,12 @@ export async function generateCode(request, response, next) {
               // contact for the game. Persist it now so it can be published.
               await saveGamePackage({
                 ...input.gamePackage,
-                creatorId: requesterId ?? "anonymous",
+                creatorId,
                 tier: "ai-refinement",
                 refinement,
+                generationAccess: generationAccess
+                  ? generationAccessMetadata(generationAccess)
+                  : input.gamePackage.generationAccess,
                 publish: {
                   ...(input.gamePackage.publish ?? {}),
                   published: false,

@@ -165,6 +165,15 @@ export async function listGamePackages({ limit = 50, search, creatorId, ids, pub
     .toArray();
 }
 
+export async function countCreatedGamePackagesByCreator(creatorId) {
+  if (!creatorId) return 0;
+  const collection = await getGameCollection();
+  return collection.countDocuments({
+    creatorId,
+    tier: { $ne: "template" }
+  });
+}
+
 // Targeted update: only touches the given fields. Background jobs (code,
 // thumbnail) finish at different times — saving a whole stale package from
 // one job would clobber what the other already wrote.
