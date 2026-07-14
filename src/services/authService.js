@@ -1,4 +1,5 @@
 import jwt from "jsonwebtoken";
+import { verifyAccessToken, verifyIdentityToken } from "@privy-io/node";
 
 // JWT configuration comes from the environment:
 //   JWT_SECRET          — signing secret (required; no insecure default)
@@ -22,7 +23,105 @@ function getExpirationDays() {
 export function getAuthConfig() {
   return {
     configured: Boolean(process.env.JWT_SECRET),
-    expirationDays: getExpirationDays()
+    expirationDays: getExpirationDays(),
+    privyConfigured: Boolean(process.env.PRIVY_APP_ID && process.env.PRIVY_VERIFICATION_KEY)
+  };
+}
+
+export function getPrivyAuthConfig() {
+  return {
+    appId: process.env.PRIVY_APP_ID,
+    verificationKey: process.env.PRIVY_VERIFICATION_KEY,
+    configured: Boolean(process.env.PRIVY_APP_ID && process.env.PRIVY_VERIFICATION_KEY)
+  };
+}
+
+function getLinkedAccounts(user) {
+  return user?.linked_accounts ?? user?.linkedAccounts ?? [];
+}
+
+function accountChainType(account) {
+  return account?.chain_type ?? account?.chainType ?? null;
+}
+
+function normalizeAddress(address) {
+  const value = String(address || "").trim();
+  if (!value) return null;
+  return /^0x[a-fA-F0-9]{40}$/.test(value) ? value.toLowerCase() : value;
+}
+
+export function derivePrivyUserId(user, fallbackUserId) {
+  const accounts = getLinkedAccounts(user);
+  const wallets = accounts.filter((account) => account?.type === "wallet" && account.address);
+  const tonWallet = wallets.find((account) => accountChainType(account) === "ton");
+  const firstWallet = wallets[0] ?? user?.wallet ?? null;
+  const telegram = accounts.find((account) => account?.type === "telegram") ?? user?.telegram ?? null;
+  const telegramUserId = telegram?.telegram_user_id ?? telegram?.telegramUserId ?? null;
+
+  return normalizeAddress(tonWallet?.address)
+    ?? normalizeAddress(firstWallet?.address)
+    ?? (telegramUserId ? `tg_${telegramUserId}` : null)
+    ?? fallbackUserId
+    ?? user?.id
+    ?? null;
+}
+
+function hasPrivyToken(accessToken, identityToken) {
+  return Boolean(accessToken || identityToken);
+}
+
+export async function verifyPrivySession({ accessToken, identityToken }) {
+  if (!hasPrivyToken(accessToken, identityToken)) return null;
+
+  const config = getPrivyAuthConfig();
+  if (!config.configured) {
+    if (process.env.NODE_ENV === "production") {
+      const error = new Error("Privy auth is not configured");
+      error.status = 500;
+      throw error;
+    }
+    return null;
+  }
+
+  const verifiedAccess = accessToken
+    ? await verifyAccessToken({
+        access_token: accessToken,
+        app_id: config.appId,
+        verification_key: config.verificationKey
+      })
+    : null;
+
+  const verifiedUser = identityToken
+    ? await verifyIdentityToken({
+        identity_token: identityToken,
+        app_id: config.appId,
+        verification_key: config.verificationKey
+      })
+    : null;
+
+  if (!verifiedAccess && !verifiedUser) {
+    const error = new Error("Privy token required");
+    error.status = 401;
+    throw error;
+  }
+
+  if (verifiedAccess && verifiedUser && verifiedAccess.user_id !== verifiedUser.id) {
+    const error = new Error("Privy token user mismatch");
+    error.status = 401;
+    throw error;
+  }
+
+  const userId = derivePrivyUserId(verifiedUser, verifiedAccess?.user_id);
+  if (!userId) {
+    const error = new Error("Could not resolve Privy identity");
+    error.status = 401;
+    throw error;
+  }
+
+  return {
+    userId,
+    privyUserId: verifiedUser?.id ?? verifiedAccess?.user_id,
+    privySessionId: verifiedAccess?.session_id
   };
 }
 

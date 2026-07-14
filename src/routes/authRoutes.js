@@ -1,10 +1,12 @@
 import { Router } from "express";
 import { z } from "zod";
-import { getAuthConfig, signToken } from "../services/authService.js";
+import { getAuthConfig, signToken, verifyPrivySession } from "../services/authService.js";
 import { attributeNewUser, requestIp } from "../services/referralService.js";
 
 const tokenSchema = z.object({
-  userId: z.string().min(1).max(128).optional()
+  userId: z.string().min(1).max(256).optional(),
+  privyAccessToken: z.string().min(1).optional().nullable(),
+  privyIdentityToken: z.string().min(1).optional().nullable()
 });
 
 export const authRouter = Router();
@@ -25,7 +27,11 @@ function referralCookie(request) {
 authRouter.post("/token", async (request, response, next) => {
   try {
     const input = tokenSchema.parse(request.body ?? {});
-    const userId = input.userId ?? `anon_${Date.now().toString(36)}`;
+    const privySession = await verifyPrivySession({
+      accessToken: input.privyAccessToken,
+      identityToken: input.privyIdentityToken
+    });
+    const userId = privySession?.userId ?? input.userId ?? `anon_${Date.now().toString(36)}`;
     await attributeNewUser({
       userId,
       code: referralCookie(request),
@@ -34,9 +40,18 @@ authRouter.post("/token", async (request, response, next) => {
       // Referral accounting must never block sign-in.
       console.warn("Could not process referral attribution", { message: error.message });
     });
-    const token = signToken({ userId });
+    const token = signToken({
+      userId,
+      privyUserId: privySession?.privyUserId,
+      privySessionId: privySession?.privySessionId
+    });
     response.clearCookie("kult_ref", { path: "/" });
-    response.json({ token, userId, expirationDays: getAuthConfig().expirationDays });
+    response.json({
+      token,
+      userId,
+      privyUserId: privySession?.privyUserId,
+      expirationDays: getAuthConfig().expirationDays
+    });
   } catch (error) {
     next(error);
   }
