@@ -50,20 +50,42 @@ function normalizeAddress(address) {
   return /^0x[a-fA-F0-9]{40}$/.test(value) ? value.toLowerCase() : value;
 }
 
-export function derivePrivyUserId(user, fallbackUserId) {
+function unique(values) {
+  return [...new Set(values.filter(Boolean))];
+}
+
+export function extractPrivyIdentity(user, fallbackUserId) {
   const accounts = getLinkedAccounts(user);
   const wallets = accounts.filter((account) => account?.type === "wallet" && account.address);
   const tonWallet = wallets.find((account) => accountChainType(account) === "ton");
+  const evmWallet = wallets.find((account) => accountChainType(account) === "ethereum" && account.address);
   const firstWallet = wallets[0] ?? user?.wallet ?? null;
   const telegram = accounts.find((account) => account?.type === "telegram") ?? user?.telegram ?? null;
   const telegramUserId = telegram?.telegram_user_id ?? telegram?.telegramUserId ?? null;
+  const privyUserId = user?.id ?? fallbackUserId ?? null;
+  const evmWalletAddress = normalizeAddress(evmWallet?.address);
+  const tonWalletAddress = normalizeAddress(tonWallet?.address);
+  const fallbackWalletAddress = normalizeAddress(firstWallet?.address);
+  const telegramAlias = telegramUserId ? `tg_${telegramUserId}` : null;
 
-  return normalizeAddress(tonWallet?.address)
-    ?? normalizeAddress(firstWallet?.address)
-    ?? (telegramUserId ? `tg_${telegramUserId}` : null)
-    ?? fallbackUserId
-    ?? user?.id
-    ?? null;
+  return {
+    userId: privyUserId ?? tonWalletAddress ?? evmWalletAddress ?? fallbackWalletAddress ?? telegramAlias,
+    privyUserId,
+    evmWalletAddress,
+    tonWalletAddress,
+    telegramUserId: telegramUserId ? String(telegramUserId) : null,
+    identityAliases: unique([
+      privyUserId,
+      tonWalletAddress,
+      evmWalletAddress,
+      fallbackWalletAddress,
+      telegramAlias
+    ])
+  };
+}
+
+export function derivePrivyUserId(user, fallbackUserId) {
+  return extractPrivyIdentity(user, fallbackUserId).userId;
 }
 
 function hasPrivyToken(accessToken, identityToken) {
@@ -111,7 +133,8 @@ export async function verifyPrivySession({ accessToken, identityToken }) {
     throw error;
   }
 
-  const userId = derivePrivyUserId(verifiedUser, verifiedAccess?.user_id);
+  const identity = extractPrivyIdentity(verifiedUser, verifiedAccess?.user_id);
+  const userId = identity.userId;
   if (!userId) {
     const error = new Error("Could not resolve Privy identity");
     error.status = 401;
@@ -120,8 +143,12 @@ export async function verifyPrivySession({ accessToken, identityToken }) {
 
   return {
     userId,
-    privyUserId: verifiedUser?.id ?? verifiedAccess?.user_id,
-    privySessionId: verifiedAccess?.session_id
+    privyUserId: identity.privyUserId,
+    privySessionId: verifiedAccess?.session_id,
+    evmWalletAddress: identity.evmWalletAddress,
+    tonWalletAddress: identity.tonWalletAddress,
+    telegramUserId: identity.telegramUserId,
+    identityAliases: identity.identityAliases
   };
 }
 

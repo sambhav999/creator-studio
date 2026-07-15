@@ -149,7 +149,8 @@ export async function listGamePackages({ limit = 50, search, creatorId, ids, pub
     }
   ];
   if (publishedOnly) filter["publish.published"] = true;
-  if (creatorId) filter.creatorId = creatorId;
+  if (Array.isArray(creatorId) && creatorId.length > 0) filter.creatorId = { $in: creatorId };
+  else if (creatorId) filter.creatorId = creatorId;
   if (Array.isArray(ids) && ids.length > 0) filter.id = { $in: ids };
   if (search) {
     filter.$or = [
@@ -169,7 +170,7 @@ export async function countCreatedGamePackagesByCreator(creatorId) {
   if (!creatorId) return 0;
   const collection = await getGameCollection();
   return collection.countDocuments({
-    creatorId,
+    creatorId: Array.isArray(creatorId) ? { $in: creatorId } : creatorId,
     tier: { $ne: "template" }
   });
 }

@@ -43,13 +43,21 @@ authRouter.post("/token", async (request, response, next) => {
     const token = signToken({
       userId,
       privyUserId: privySession?.privyUserId,
-      privySessionId: privySession?.privySessionId
+      privySessionId: privySession?.privySessionId,
+      evmWalletAddress: privySession?.evmWalletAddress,
+      tonWalletAddress: privySession?.tonWalletAddress,
+      telegramUserId: privySession?.telegramUserId,
+      identityAliases: privySession?.identityAliases ?? (userId ? [userId] : [])
     });
     response.clearCookie("kult_ref", { path: "/" });
     response.json({
       token,
       userId,
       privyUserId: privySession?.privyUserId,
+      evmWalletAddress: privySession?.evmWalletAddress,
+      tonWalletAddress: privySession?.tonWalletAddress,
+      telegramUserId: privySession?.telegramUserId,
+      identityAliases: privySession?.identityAliases ?? (userId ? [userId] : []),
       expirationDays: getAuthConfig().expirationDays
     });
   } catch (error) {

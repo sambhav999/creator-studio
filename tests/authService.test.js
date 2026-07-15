@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { derivePrivyUserId, verifyPrivySession } from "../src/services/authService.js";
+import { derivePrivyUserId, extractPrivyIdentity, verifyPrivySession } from "../src/services/authService.js";
 
-test("derivePrivyUserId prefers TON wallets over other linked identities", () => {
+test("derivePrivyUserId uses Privy id as the canonical cross-app identity", () => {
   const userId = derivePrivyUserId({
     id: "did:privy:user",
     linked_accounts: [
@@ -23,13 +23,45 @@ test("derivePrivyUserId prefers TON wallets over other linked identities", () =>
     ]
   });
 
-  assert.equal(userId, "EQBtonWalletAddress");
+  assert.equal(userId, "did:privy:user");
 });
 
-test("derivePrivyUserId falls back to wallet, Telegram, and Privy ids", () => {
+test("extractPrivyIdentity keeps wallets and Telegram as aliases", () => {
+  const identity = extractPrivyIdentity({
+    id: "did:privy:user",
+    linked_accounts: [
+      {
+        type: "telegram",
+        telegram_user_id: "12345"
+      },
+      {
+        type: "wallet",
+        chain_type: "ethereum",
+        address: "0xABCDEFabcdefABCDEFabcdefABCDEFabcdefABCD"
+      },
+      {
+        type: "wallet",
+        chain_type: "ton",
+        address: "EQBtonWalletAddress"
+      }
+    ]
+  });
+
+  assert.equal(identity.userId, "did:privy:user");
+  assert.equal(identity.evmWalletAddress, "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd");
+  assert.equal(identity.tonWalletAddress, "EQBtonWalletAddress");
+  assert.equal(identity.telegramUserId, "12345");
+  assert.deepEqual(identity.identityAliases, [
+    "did:privy:user",
+    "EQBtonWalletAddress",
+    "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+    "tg_12345"
+  ]);
+});
+
+test("derivePrivyUserId falls back to wallet, Telegram, and access token ids", () => {
   assert.equal(
     derivePrivyUserId({
-      id: "did:privy:user",
       linkedAccounts: [
         {
           type: "wallet",
@@ -43,7 +75,6 @@ test("derivePrivyUserId falls back to wallet, Telegram, and Privy ids", () => {
 
   assert.equal(
     derivePrivyUserId({
-      id: "did:privy:user",
       linked_accounts: [
         {
           type: "telegram",
@@ -54,7 +85,8 @@ test("derivePrivyUserId falls back to wallet, Telegram, and Privy ids", () => {
     "tg_12345"
   );
 
-  assert.equal(derivePrivyUserId({ id: "did:privy:user" }, "did:from-access-token"), "did:from-access-token");
+  assert.equal(derivePrivyUserId({ id: "did:privy:user" }, "did:from-access-token"), "did:privy:user");
+  assert.equal(derivePrivyUserId(null, "did:from-access-token"), "did:from-access-token");
 });
 
 test("verifyPrivySession is additive for non-Privy clients", async () => {

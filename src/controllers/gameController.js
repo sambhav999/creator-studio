@@ -17,6 +17,11 @@ import { putBufferOnZeroG } from "../services/zeroGStorage.js";
 import { awardFirstGameBonus, recordCreatorGamePublished } from "../services/pointsService.js";
 import { notifyFollowersOfPublish } from "../services/socialService.js";
 import { assertGenerationAccess, generationAccessMetadata } from "../services/generationAccessService.js";
+import {
+  authIdentityAliases,
+  authOwnsIdentity,
+  creatorFilterForAuth
+} from "../services/identityAliasService.js";
 
 const createSchema = z.object({
   templateId: z.string().min(1),
@@ -62,7 +67,7 @@ export async function listGames(request, response, next) {
     const limit = Math.min(Number(request.query.limit) || 50, 100);
     const search = request.query.search || request.query.q;
     const creatorId = request.query.creatorId;
-    if (creatorId && creatorId !== request.auth?.userId) {
+    if (creatorId && !authOwnsIdentity(request.auth, creatorId)) {
       response.status(403).json({ error: "You can only list your own draft games" });
       return;
     }
@@ -72,7 +77,7 @@ export async function listGames(request, response, next) {
     const games = await listGamePackages({
       limit,
       search,
-      creatorId,
+      creatorId: creatorId ? creatorFilterForAuth(request.auth, creatorId) : undefined,
       ids,
       publishedOnly: !creatorId
     });
@@ -103,6 +108,9 @@ export async function checkGenerationAccess(request, response, next) {
     const creatorId = request.auth?.userId ?? "anonymous";
     const generationAccess = await assertGenerationAccess({
       creatorId,
+      creatorAliases: authIdentityAliases(request.auth),
+      evmWalletAddress: request.auth?.evmWalletAddress,
+      tonWalletAddress: request.auth?.tonWalletAddress,
       paymentTxHash: request.query.paymentTxHash
     });
     response.json({
@@ -134,7 +142,7 @@ export async function showManagedGame(request, response, next) {
       response.status(404).json({ error: "Game not found" });
       return;
     }
-    if (game.creatorId && game.creatorId !== request.auth?.userId) {
+    if (game.creatorId && !authOwnsIdentity(request.auth, game.creatorId)) {
       response.status(403).json({ error: "Only the creator can access this draft" });
       return;
     }
@@ -158,7 +166,7 @@ export async function publishGame(request, response, next) {
       response.status(404).json({ error: "Game not found" });
       return;
     }
-    if (game.creatorId && game.creatorId !== request.auth?.userId) {
+    if (game.creatorId && !authOwnsIdentity(request.auth, game.creatorId)) {
       response.status(403).json({ error: "Only the creator can publish this game" });
       return;
     }
@@ -213,7 +221,7 @@ export async function unpublishGame(request, response, next) {
       response.status(404).json({ error: "Game not found" });
       return;
     }
-    if (game.creatorId && game.creatorId !== request.auth?.userId) {
+    if (game.creatorId && !authOwnsIdentity(request.auth, game.creatorId)) {
       response.status(403).json({ error: "Only the creator can unpublish this game" });
       return;
     }
@@ -249,7 +257,7 @@ export async function featureGameInBrowser(request, response, next) {
       response.status(404).json({ error: "Game not found" });
       return;
     }
-    if (game.creatorId && game.creatorId !== request.auth?.userId) {
+    if (game.creatorId && !authOwnsIdentity(request.auth, game.creatorId)) {
       response.status(403).json({ error: "Only the creator can request browser featuring" });
       return;
     }
@@ -278,7 +286,7 @@ export async function unfeatureGameInBrowser(request, response, next) {
       response.status(404).json({ error: "Game not found" });
       return;
     }
-    if (game.creatorId && game.creatorId !== request.auth?.userId) {
+    if (game.creatorId && !authOwnsIdentity(request.auth, game.creatorId)) {
       response.status(403).json({ error: "Only the creator can remove browser featuring" });
       return;
     }
@@ -306,7 +314,7 @@ export async function saveGame(request, response, next) {
     const input = saveSchema.parse(request.body);
     const existing = await getGamePackageById(request.params.gameId);
     const requester = request.auth?.userId;
-    if (existing?.creatorId && existing.creatorId !== requester) {
+    if (existing?.creatorId && !authOwnsIdentity(request.auth, existing.creatorId)) {
       response.status(403).json({ error: "Only the creator can edit this game" });
       return;
     }
@@ -340,7 +348,7 @@ export async function deleteGame(request, response, next) {
   try {
     const existing = await getGamePackageById(request.params.gameId);
     const requester = request.auth?.userId;
-    if (existing?.creatorId && existing.creatorId !== requester) {
+    if (existing?.creatorId && !authOwnsIdentity(request.auth, existing.creatorId)) {
       response.status(403).json({ error: "Only the creator can delete this game" });
       return;
     }
@@ -361,6 +369,9 @@ export async function createGame(request, response, next) {
     const creatorId = request.auth?.userId ?? "anonymous";
     const generationAccess = await assertGenerationAccess({
       creatorId,
+      creatorAliases: authIdentityAliases(request.auth),
+      evmWalletAddress: request.auth?.evmWalletAddress,
+      tonWalletAddress: request.auth?.tonWalletAddress,
       paymentTxHash: input.paymentTxHash
     });
     const game = createGamePackage(input);
@@ -388,6 +399,9 @@ export async function generateGame(request, response, next) {
     const creatorId = request.auth?.userId ?? "anonymous";
     const generationAccess = await assertGenerationAccess({
       creatorId,
+      creatorAliases: authIdentityAliases(request.auth),
+      evmWalletAddress: request.auth?.evmWalletAddress,
+      tonWalletAddress: request.auth?.tonWalletAddress,
       paymentTxHash: input.paymentTxHash
     });
     const result = await generateGameFromPrompt(input);

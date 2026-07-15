@@ -7,6 +7,7 @@ import {
 import { getJob, serializeJob, startJob } from "../services/jobService.js";
 import { createRefinementBundle } from "../services/refinementService.js";
 import { assertGenerationAccess, generationAccessMetadata } from "../services/generationAccessService.js";
+import { authIdentityAliases, authOwnsIdentity } from "../services/identityAliasService.js";
 import {
   analyzeReferenceImage,
   createOrchestrationPlan,
@@ -84,6 +85,9 @@ export async function generateCode(request, response, next) {
     if (!existingGame) {
       generationAccess = await assertGenerationAccess({
         creatorId,
+        creatorAliases: authIdentityAliases(request.auth),
+        evmWalletAddress: request.auth?.evmWalletAddress,
+        tonWalletAddress: request.auth?.tonWalletAddress,
         paymentTxHash: input.paymentTxHash
       });
     }
@@ -97,7 +101,7 @@ export async function generateCode(request, response, next) {
         try {
           // Only the game's creator may overwrite its stored build.
           const stored = await getGamePackageById(input.gamePackage.id);
-          const owned = !stored?.creatorId || stored.creatorId === requesterId;
+          const owned = !stored?.creatorId || authOwnsIdentity(request.auth, stored.creatorId);
           if (owned) {
             if (stored) {
               await updateGamePackageFields(input.gamePackage.id, {
