@@ -159,11 +159,21 @@ export async function listGamePackages({ limit = 50, search, creatorId, ids, pub
       { "customization.prompt": { $regex: search, $options: "i" } }
     ];
   }
-  return collection
+  const games = await collection
     .find(filter, { projection: { _id: 0 } })
     .sort({ updatedAt: -1 })
-    .limit(limit)
+    .limit(publishedOnly ? Math.min(limit * 3, 300) : limit)
     .toArray();
+  if (!publishedOnly) return games;
+  const now = Date.now();
+  return games
+    .sort((a, b) => {
+      const aBoosted = a.launchBoost?.active === true && (Date.parse(a.launchBoost?.endsAt ?? "") || 0) > now;
+      const bBoosted = b.launchBoost?.active === true && (Date.parse(b.launchBoost?.endsAt ?? "") || 0) > now;
+      if (aBoosted !== bBoosted) return aBoosted ? -1 : 1;
+      return (Date.parse(b.updatedAt ?? "") || 0) - (Date.parse(a.updatedAt ?? "") || 0);
+    })
+    .slice(0, limit);
 }
 
 export async function countCreatedGamePackagesByCreator(creatorId) {
