@@ -1,15 +1,22 @@
 import { z } from "zod";
 import {
   createLaunchBoostOrder,
+  createGenerationStarsOrder,
   getStarOrder,
   handleTelegramPaymentUpdate,
   launchBoostConfig
 } from "../services/telegramStarsService.js";
 
-const createOrderSchema = z.object({
-  gameId: z.string().min(1),
-  productCode: z.literal("launch_boost").default("launch_boost")
-}).strict();
+const createOrderSchema = z.discriminatedUnion("productCode", [
+  z.object({
+    productCode: z.literal("launch_boost"),
+    gameId: z.string().min(1)
+  }).strict(),
+  z.object({
+    productCode: z.literal("game_generation"),
+    tier: z.coerce.number().int().min(1).max(3)
+  }).strict()
+]);
 
 const orderParamsSchema = z.object({
   orderId: z.string().min(1)
@@ -26,10 +33,9 @@ export async function handleGetStarsProducts(_request, response, next) {
 export async function handleCreateStarsOrder(request, response, next) {
   try {
     const input = createOrderSchema.parse(request.body ?? {});
-    const order = await createLaunchBoostOrder({
-      auth: request.auth,
-      gameId: input.gameId
-    });
+    const order = input.productCode === "game_generation"
+      ? await createGenerationStarsOrder({ auth: request.auth, tier: input.tier })
+      : await createLaunchBoostOrder({ auth: request.auth, gameId: input.gameId });
     response.status(201).json({ order });
   } catch (error) {
     next(error);

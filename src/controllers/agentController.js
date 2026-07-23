@@ -37,7 +37,9 @@ const codeSchema = z.object({
   // build. Optional here because post-creation edits (baseCode) reuse the
   // internal default models instead.
   tier: z.coerce.number().int().min(1).max(3).optional(),
+  paymentMethod: z.enum(["ton", "0g", "stars"]).optional(),
   paymentTxHash: z.string().min(1).optional(),
+  starsOrderId: z.string().min(1).optional(),
   // Current build source — when present, the agent edits this code instead of
   // generating from a template seed (post-creation "wish" edits).
   baseCode: z.string().optional()
@@ -125,6 +127,9 @@ export async function generateCode(request, response, next) {
           evmWalletAddress: request.auth?.evmWalletAddress,
           tonWalletAddress: request.auth?.tonWalletAddress,
           paymentTxHash: input.paymentTxHash,
+          paymentMethod: input.paymentMethod,
+          starsOrderId: input.starsOrderId,
+          auth: request.auth,
           tier
         });
       }

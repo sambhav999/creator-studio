@@ -46,7 +46,9 @@ const promptGenerateSchema = z.object({
   includeAssets: z.boolean().optional(),
   strategy: z.enum(["hybrid", "pure-agent"]).optional(),
   tier: z.coerce.number().int().min(1).max(3),
+  paymentMethod: z.enum(["ton", "0g", "stars"]).optional(),
   paymentTxHash: z.string().min(1).optional(),
+  starsOrderId: z.string().min(1).optional(),
   userId: z.string().optional()
 }).strict();
 
@@ -410,6 +412,9 @@ export async function generateGame(request, response, next) {
       evmWalletAddress: request.auth?.evmWalletAddress,
       tonWalletAddress: request.auth?.tonWalletAddress,
       paymentTxHash: input.paymentTxHash,
+      paymentMethod: input.paymentMethod,
+      starsOrderId: input.starsOrderId,
+      auth: request.auth,
       tier
     });
     const result = await generateGameFromPrompt({ ...input, tier });

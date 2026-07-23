@@ -10,6 +10,23 @@ const PRODUCT_CODE = "launch_boost";
 const PRODUCT_TITLE = "Launch Boost";
 const PRODUCT_DESCRIPTION = "48 hours of additional distribution for one published KULT game.";
 
+const GENERATION_PRODUCT_CODE = "game_generation";
+const GENERATION_PRODUCT_TITLE = "Game Generation";
+
+// Built-in Stars price per tier (Telegram Stars = "XTR"). Overridable via
+// PAID_GAME_PRICE_STARS_TIER{n}. Telegram requires a positive integer amount.
+const DEFAULT_STARS_PRICE = { 1: 50, 2: 150, 3: 400 };
+
+export function generationStarsPrice(tier) {
+  const n = [1, 2, 3].includes(Number(tier)) ? Number(tier) : 1;
+  const value = Number(process.env[`PAID_GAME_PRICE_STARS_TIER${n}`]);
+  return Number.isFinite(value) && value > 0 ? Math.round(value) : DEFAULT_STARS_PRICE[n];
+}
+
+export function starsPaymentAvailable() {
+  return Boolean(process.env.TELEGRAM_BOT_TOKEN);
+}
+
 export function launchBoostConfig() {
   return {
     code: PRODUCT_CODE,
@@ -64,15 +81,17 @@ async function createInvoiceLink(order) {
     throw error;
   }
 
+  const title = order.productTitle || PRODUCT_TITLE;
+  const description = order.productDescription || PRODUCT_DESCRIPTION;
   const response = await fetch(`https://api.telegram.org/bot${token}/createInvoiceLink`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      title: PRODUCT_TITLE,
-      description: PRODUCT_DESCRIPTION,
+      title,
+      description,
       payload: order.invoicePayload,
       currency: "XTR",
-      prices: [{ label: PRODUCT_TITLE, amount: order.starsAmount }],
+      prices: [{ label: title, amount: order.starsAmount }],
       provider_token: "",
     })
   });
@@ -158,6 +177,114 @@ export async function getStarOrder({ auth, orderId }) {
     throw error;
   }
   return publicOrder(order);
+}
+
+// Creates a Telegram Stars invoice to pay for ONE game generation on a tier.
+// Unlike Launch Boost there is no on-payment fulfillment — the order is simply
+// marked PAID by the webhook, then consumed when the generation runs.
+export async function createGenerationStarsOrder({ auth, tier }) {
+  assertTelegramBuyer(auth);
+  const t = [1, 2, 3].includes(Number(tier)) ? Number(tier) : 1;
+  const starsAmount = generationStarsPrice(t);
+  const now = new Date();
+  const order = {
+    id: `star_order_${nanoid(16)}`,
+    userId: auth.userId,
+    telegramUserId: String(auth.telegramUserId),
+    productCode: GENERATION_PRODUCT_CODE,
+    productTitle: GENERATION_PRODUCT_TITLE,
+    productDescription: `Generate one Tier ${t} game on KULT.`,
+    tier: t,
+    gameId: null,
+    gameTitle: null,
+    status: "CREATED",
+    currency: "XTR",
+    starsAmount,
+    invoicePayload: `game_generation:${auth.telegramUserId}:${t}:${nanoid(18)}`,
+    invoiceUrl: null,
+    telegramPaymentChargeId: null,
+    providerPaymentChargeId: null,
+    failureReason: null,
+    createdAt: now,
+    updatedAt: now,
+    paidAt: null,
+    consumedAt: null,
+    refundedAt: null
+  };
+
+  const { orders } = await collections();
+  await orders.insertOne(order);
+  let invoiceUrl;
+  try {
+    invoiceUrl = await createInvoiceLink(order);
+  } catch (error) {
+    await orders.updateOne(
+      { id: order.id },
+      { $set: { status: "FAILED", failureReason: error.message, updatedAt: new Date() } }
+    );
+    throw error;
+  }
+  await orders.updateOne(
+    { id: order.id },
+    { $set: { invoiceUrl, status: "INVOICE_CREATED", updatedAt: new Date() } }
+  );
+  return publicOrder({ ...order, invoiceUrl, status: "INVOICE_CREATED" });
+}
+
+// Atomically verifies a PAID generation order belongs to this user and matches
+// the tier, then marks it consumed so one payment yields exactly one game. Throws
+// a 402 if it isn't paid yet, 403 if it isn't the caller's, 409 if already used.
+export async function consumeGenerationStarsOrder({ auth, orderId, tier }) {
+  const { orders } = await collections();
+  const order = await orders.findOne({ id: orderId }, { projection: { _id: 0 } });
+  if (!order || order.productCode !== GENERATION_PRODUCT_CODE) {
+    const error = new Error("Stars generation order not found");
+    error.status = 404;
+    throw error;
+  }
+  const ownsOrder =
+    order.userId === auth?.userId ||
+    (auth?.telegramUserId && order.telegramUserId === String(auth.telegramUserId));
+  if (!ownsOrder) {
+    const error = new Error("You can only use your own Stars order");
+    error.status = 403;
+    throw error;
+  }
+  const t = [1, 2, 3].includes(Number(tier)) ? Number(tier) : 1;
+  if (Number(order.tier) !== t) {
+    const error = new Error(`This Stars payment was for Tier ${order.tier}, not Tier ${t}.`);
+    error.status = 409;
+    throw error;
+  }
+  if (order.status === "FULFILLED" || order.consumedAt) {
+    const error = new Error("This Stars payment was already used for a game.");
+    error.status = 409;
+    throw error;
+  }
+  if (order.status !== "PAID") {
+    const error = new Error("Stars payment not confirmed yet. Complete the payment in Telegram.");
+    error.status = 402;
+    error.code = "STARS_PAYMENT_PENDING";
+    throw error;
+  }
+  // Atomic consume: only the first request that flips PAID→FULFILLED wins.
+  const result = await orders.findOneAndUpdate(
+    { id: order.id, status: "PAID" },
+    { $set: { status: "FULFILLED", consumedAt: new Date(), updatedAt: new Date() } },
+    { returnDocument: "after", projection: { _id: 0 } }
+  );
+  const updated = result?.value ?? result;
+  if (!updated || updated.status !== "FULFILLED") {
+    const error = new Error("This Stars payment was already used for a game.");
+    error.status = 409;
+    throw error;
+  }
+  return {
+    method: "stars",
+    orderId: order.id,
+    starsAmount: order.starsAmount,
+    telegramPaymentChargeId: order.telegramPaymentChargeId
+  };
 }
 
 async function answerPreCheckoutQuery(query, ok, errorMessage) {
@@ -294,7 +421,12 @@ export async function handleTelegramPaymentUpdate(update) {
           }
         }
       );
-      await activateBoost({ ...order, paidAt: new Date() }, payment);
+      // Launch Boost fulfills immediately (activate the boost). A game-generation
+      // order stays PAID until the generation request consumes it — the game is
+      // built when the user retries, not here.
+      if (order.productCode === PRODUCT_CODE) {
+        await activateBoost({ ...order, paidAt: new Date() }, payment);
+      }
     }
   }
 

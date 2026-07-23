@@ -3,6 +3,7 @@ import { countCreatedGamePackagesByCreator } from "./databaseService.js";
 import { verifyAndRecordGenerationPayment } from "./zeroGPaymentService.js";
 import { verifyAndRecordTonGenerationPayment } from "./tonPaymentService.js";
 import { normalizeTier } from "./zeroGService.js";
+import { consumeGenerationStarsOrder, generationStarsPrice, starsPaymentAvailable } from "./telegramStarsService.js";
 
 // Reads a non-negative number from env, else the given fallback.
 function envPrice(name, fallback) {
@@ -115,15 +116,22 @@ function hasUnlimitedAccess({ creatorId, creatorAliases, evmWalletAddress, tonWa
   return matched;
 }
 
-function generationAccessError({ amount, currency, existingGames }) {
-  const error = new Error(`You already generated your free game. Generate another game for ${amount} ${currency}.`);
+// 402 with BOTH payment options so the client can let the user choose: pay in
+// the on-chain currency (TON/0G) or in Telegram Stars.
+function generationAccessError({ amount, currency, existingGames, tier, starsAmount }) {
+  const error = new Error(`You already generated your free game. Generate another game for ${amount} ${currency} or ${starsAmount} Stars.`);
   error.status = 402;
   error.code = "PAID_GENERATION_REQUIRED";
   error.payment = {
     required: true,
     currency,
     amount,
-    existingGames
+    tier: normalizeTier(tier),
+    existingGames,
+    methods: {
+      chain: { method: currency === "0G" ? "0g" : "ton", currency, amount },
+      stars: { method: "stars", currency: "XTR", amount: starsAmount, available: starsPaymentAvailable() }
+    }
   };
   return error;
 }
@@ -134,9 +142,13 @@ export async function assertGenerationAccess({
   paymentTxHash,
   evmWalletAddress,
   tonWalletAddress,
-  tier
+  tier,
+  paymentMethod,
+  starsOrderId,
+  auth
 }) {
   const paymentRequirement = paymentDetails(tier);
+  const starsAmount = generationStarsPrice(tier);
 
   // Whitelisted wallets bypass counting AND payment: unlimited free games, any tier.
   if (hasUnlimitedAccess({ creatorId, creatorAliases, evmWalletAddress, tonWalletAddress })) {
@@ -161,8 +173,28 @@ export async function assertGenerationAccess({
       existingGames
     };
   }
+
+  // Paid path — the user chose a method. Stars: consume a prepaid Telegram order.
+  if (paymentMethod === "stars" || (starsOrderId && paymentMethod !== "ton" && paymentMethod !== "0g")) {
+    if (!starsOrderId) {
+      throw generationAccessError({ ...paymentRequirement, existingGames, tier, starsAmount });
+    }
+    const payment = await consumeGenerationStarsOrder({ auth, orderId: starsOrderId, tier });
+    return {
+      free: false,
+      currency: "XTR",
+      amount: payment.starsAmount,
+      tier: paymentRequirement.tier,
+      existingGames,
+      paymentMethod: "stars",
+      starsOrderId,
+      payment
+    };
+  }
+
+  // On-chain path (TON or 0G).
   if (!paymentTxHash) {
-    throw generationAccessError({ ...paymentRequirement, existingGames });
+    throw generationAccessError({ ...paymentRequirement, existingGames, tier, starsAmount });
   }
   const payment = paymentRequirement.currency === "0G"
     ? await verifyAndRecordGenerationPayment({
@@ -234,6 +266,9 @@ export function generationAccessMetadata(generationAccess) {
     amount: generationAccess.free ? 0 : generationAccess.amount,
     price0G: generationAccess.currency === "0G" && !generationAccess.free ? generationAccess.amount : 0,
     priceTON: generationAccess.currency === "TON" && !generationAccess.free ? generationAccess.amount : 0,
+    priceStars: generationAccess.currency === "XTR" && !generationAccess.free ? generationAccess.amount : 0,
+    paymentMethod: generationAccess.paymentMethod ?? null,
+    starsOrderId: generationAccess.starsOrderId ?? null,
     paymentTxHash: generationAccess.paymentTxHash ?? null,
     payment: generationAccess.payment ?? null,
     existingGamesBeforeCreate: generationAccess.existingGames
