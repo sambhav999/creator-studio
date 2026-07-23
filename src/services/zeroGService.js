@@ -165,7 +165,13 @@ async function parseJsonResponse(response) {
   const data = raw ? JSON.parse(raw) : {};
 
   if (!response.ok) {
-    const error = new Error(data?.error?.message || `0G API request failed with status ${response.status}`);
+    // Error shape varies: OpenAI-format {error:{message}}, Anthropic-format
+    // {error:{message}}, and the 0G router sometimes {error:"<string>"}.
+    const message =
+      data?.error?.message ||
+      (typeof data?.error === "string" ? data.error : null) ||
+      `0G API request failed with status ${response.status}`;
+    const error = new Error(message);
     error.status = response.status;
     error.details = data?.error ?? null;
     throw error;
@@ -248,6 +254,130 @@ async function readChatStream(response, onChunk) {
   return { content, finishReason, usage };
 }
 
+// Claude/Anthropic models on the 0G router are NOT served on the OpenAI
+// /chat/completions format — they must use the Anthropic Messages endpoint
+// (/v1/messages) with its own request/response/stream shape. Everything else
+// (GLM, GPT, DeepSeek, Qwen, MiniMax, Kimi…) stays on the OpenAI format.
+function isAnthropicModel(model) {
+  return /^claude-/i.test(String(model || ""));
+}
+
+// Converts the OpenAI-style {messages,temperature,maxTokens} into an Anthropic
+// Messages body. The 0G router's Anthropic passthrough rejects a top-level
+// `system` field (it 500s), so the system prompt is folded into the first user
+// turn instead of sent separately. Content is text-only here — Claude models are
+// used only for the text coding/orchestrator roles, never vision.
+function toAnthropicBody({ model, messages, maxTokens }) {
+  const systemParts = [];
+  const convo = [];
+  for (const m of messages) {
+    const text = typeof m.content === "string"
+      ? m.content
+      : Array.isArray(m.content)
+        ? m.content.map((p) => (typeof p === "string" ? p : p.text ?? "")).join("\n")
+        : String(m.content ?? "");
+    if (m.role === "system") systemParts.push(text);
+    else convo.push({ role: m.role === "assistant" ? "assistant" : "user", content: text });
+  }
+
+  const systemText = systemParts.join("\n\n");
+  if (systemText) {
+    const firstUser = convo.find((m) => m.role === "user");
+    if (firstUser) firstUser.content = `${systemText}\n\n${firstUser.content}`;
+    else convo.unshift({ role: "user", content: systemText });
+  }
+
+  // No `temperature`: Claude thinking models (Fable/Opus on this router) reject
+  // it as a deprecated parameter — the model uses its own default.
+  return {
+    model,
+    max_tokens: maxTokens,
+    stream: true,
+    messages: convo
+  };
+}
+
+// Anthropic stop_reason → OpenAI finish_reason, so downstream logic (e.g. the
+// "finishReason === 'length' → issue a continuation" path in refinementService)
+// keeps working unchanged.
+function mapAnthropicStop(reason) {
+  if (reason === "max_tokens") return "length";
+  if (reason === "end_turn" || reason === "stop_sequence") return "stop";
+  return reason ?? null;
+}
+
+// Reads an Anthropic Messages SSE stream and accumulates the text. Usage is
+// normalized to the OpenAI {prompt_tokens,completion_tokens,total_tokens} shape.
+async function readAnthropicStream(response, onChunk) {
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let raw = "";
+  let content = "";
+  let finishReason = null;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let sawSse = false;
+
+  for await (const value of response.body) {
+    const text = decoder.decode(value, { stream: true });
+    buffer += text;
+    raw += text;
+
+    let newlineIndex;
+    while ((newlineIndex = buffer.indexOf("\n")) !== -1) {
+      const line = buffer.slice(0, newlineIndex).trim();
+      buffer = buffer.slice(newlineIndex + 1);
+      if (!line.startsWith("data:")) continue;
+      sawSse = true;
+      const payload = line.slice(5).trim();
+      if (!payload || payload === "[DONE]") continue;
+      try {
+        const evt = JSON.parse(payload);
+        if (evt.type === "content_block_delta" && evt.delta?.text) {
+          content += evt.delta.text;
+          onChunk?.(content.length);
+        } else if (evt.type === "message_start" && evt.message?.usage) {
+          inputTokens = evt.message.usage.input_tokens ?? inputTokens;
+        } else if (evt.type === "message_delta") {
+          if (evt.delta?.stop_reason) finishReason = mapAnthropicStop(evt.delta.stop_reason);
+          if (evt.usage?.output_tokens) outputTokens = evt.usage.output_tokens;
+        }
+      } catch {
+        // ignore partial/keepalive lines
+      }
+    }
+  }
+
+  if (!sawSse) {
+    // Provider ignored stream:true — parse the plain Messages JSON body.
+    const data = raw ? JSON.parse(raw) : {};
+    const textBlocks = Array.isArray(data.content)
+      ? data.content.filter((b) => b.type === "text").map((b) => b.text).join("")
+      : "";
+    return {
+      content: textBlocks,
+      finishReason: mapAnthropicStop(data.stop_reason),
+      usage: data.usage
+        ? {
+            prompt_tokens: data.usage.input_tokens ?? 0,
+            completion_tokens: data.usage.output_tokens ?? 0,
+            total_tokens: (data.usage.input_tokens ?? 0) + (data.usage.output_tokens ?? 0)
+          }
+        : null
+    };
+  }
+
+  return {
+    content,
+    finishReason,
+    usage: {
+      prompt_tokens: inputTokens,
+      completion_tokens: outputTokens,
+      total_tokens: inputTokens + outputTokens
+    }
+  };
+}
+
 export async function callZeroGChat({
   model,
   messages,
@@ -269,27 +399,33 @@ export async function callZeroGChat({
       // headers take more than 5 minutes (undici headersTimeout), and long
       // non-streamed generations exceed that. With streaming, headers arrive
       // immediately and tokens flow as they are produced.
-      const response = await fetch(`${baseUrl}/chat/completions`, {
+      //
+      // Claude models take the Anthropic Messages endpoint/format; everything
+      // else takes the OpenAI chat/completions format.
+      const anthropic = isAnthropicModel(model);
+      const url = anthropic ? `${baseUrl}/messages` : `${baseUrl}/chat/completions`;
+      const response = await fetch(url, {
         method: "POST",
         signal: controller.signal,
         headers: {
           "Authorization": `Bearer ${apiKey}`,
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
+          ...(anthropic ? { "anthropic-version": "2023-06-01" } : {})
         },
-        body: JSON.stringify({
-          model,
-          messages,
-          temperature,
-          max_tokens: maxTokens,
-          stream: true
-        })
+        body: JSON.stringify(
+          anthropic
+            ? toAnthropicBody({ model, messages, maxTokens })
+            : { model, messages, temperature, max_tokens: maxTokens, stream: true }
+        )
       });
 
       if (!response.ok) {
         await parseJsonResponse(response);
       }
 
-      const { content, finishReason, usage } = await readChatStream(response, onChunk);
+      const { content, finishReason, usage } = anthropic
+        ? await readAnthropicStream(response, onChunk)
+        : await readChatStream(response, onChunk);
 
       if (!content) {
         const error = new Error("0G API returned no message content");

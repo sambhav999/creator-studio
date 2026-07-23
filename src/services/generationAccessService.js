@@ -1,3 +1,4 @@
+import { Address } from "@ton/core";
 import { countCreatedGamePackagesByCreator } from "./databaseService.js";
 import { verifyAndRecordGenerationPayment } from "./zeroGPaymentService.js";
 import { verifyAndRecordTonGenerationPayment } from "./tonPaymentService.js";
@@ -71,11 +72,25 @@ function paymentDetails(tier) {
 // case-insensitive and only checks the AUTHENTICATED identity/wallets on the
 // request, so it can't be spoofed by typing an address — the caller must control
 // the wallet to be authed as it.
+// Canonicalizes an identity for whitelist matching. A TON address has several
+// valid string forms for the SAME wallet (bounceable EQ…, non-bounceable UQ…,
+// raw 0:…), so we reduce any TON address to its raw form. Everything else
+// (EVM 0x…, Privy user id, telegram alias) is compared lowercased.
+function canonicalIdentity(value) {
+  const s = String(value || "").trim();
+  if (!s) return null;
+  try {
+    return Address.parse(s).toRawString().toLowerCase();
+  } catch {
+    return s.toLowerCase();
+  }
+}
+
 function unlimitedWalletSet() {
   return new Set(
     String(process.env.UNLIMITED_WALLETS || "")
       .split(",")
-      .map((entry) => entry.trim().toLowerCase())
+      .map((entry) => canonicalIdentity(entry))
       .filter(Boolean)
   );
 }
@@ -83,15 +98,21 @@ function unlimitedWalletSet() {
 function hasUnlimitedAccess({ creatorId, creatorAliases, evmWalletAddress, tonWalletAddress }) {
   const allow = unlimitedWalletSet();
   if (allow.size === 0) return false;
-  const identities = [
+  const rawIdentities = [
     creatorId,
     evmWalletAddress,
     tonWalletAddress,
     ...(Array.isArray(creatorAliases) ? creatorAliases : [])
-  ]
-    .filter(Boolean)
-    .map((value) => String(value).toLowerCase());
-  return identities.some((value) => allow.has(value));
+  ].filter(Boolean);
+  const identities = rawIdentities.map((value) => canonicalIdentity(value)).filter(Boolean);
+  const matched = identities.some((value) => allow.has(value));
+  // Diagnostic: on a MISS, log the exact identity strings the gate saw so the
+  // right one can be added to UNLIMITED_WALLETS. Only logs when a whitelist is
+  // configured, so it stays quiet in normal operation.
+  if (!matched) {
+    console.log("[unlimited-wallet] no match — whitelist one of these identities:", rawIdentities);
+  }
+  return matched;
 }
 
 function generationAccessError({ amount, currency, existingGames }) {
