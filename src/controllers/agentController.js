@@ -6,7 +6,7 @@ import {
 } from "../services/databaseService.js";
 import { getJob, serializeJob, startJob } from "../services/jobService.js";
 import { createRefinementBundle } from "../services/refinementService.js";
-import { assertGenerationAccess, generationAccessMetadata } from "../services/generationAccessService.js";
+import { assertGenerationAccess, assertEditAccess, generationAccessMetadata } from "../services/generationAccessService.js";
 import { authIdentityAliases, authOwnsIdentity } from "../services/identityAliasService.js";
 import {
   analyzeReferenceImage,
@@ -14,7 +14,13 @@ import {
   generateImageAsset,
   getZeroGConfig,
   runBackgroundTask,
-  transcribeAudio
+  transcribeAudio,
+  getModelsForTier,
+  getTierStrategy,
+  getEditingModelsForTier,
+  getEditingStrategy,
+  normalizeTier,
+  zeroGModels
 } from "../services/zeroGService.js";
 
 const orchestrationSchema = z.object({
@@ -27,6 +33,10 @@ const codeSchema = z.object({
   request: z.string().optional(),
   refinementLevel: z.string().optional(),
   strategy: z.string().optional(),
+  // The quality tier the user picked. Owns the model set + strategy for a fresh
+  // build. Optional here because post-creation edits (baseCode) reuse the
+  // internal default models instead.
+  tier: z.coerce.number().int().min(1).max(3).optional(),
   paymentTxHash: z.string().min(1).optional(),
   // Current build source — when present, the agent edits this code instead of
   // generating from a template seed (post-creation "wish" edits).
@@ -80,19 +90,50 @@ export async function generateCode(request, response, next) {
     const input = codeSchema.parse(request.body);
     const requesterId = request.auth?.userId ?? null;
     const creatorId = requesterId ?? "anonymous";
-    let generationAccess = null;
     const existingGame = input.gamePackage?.id ? await getGamePackageById(input.gamePackage.id) : null;
-    if (!existingGame) {
-      generationAccess = await assertGenerationAccess({
+
+    // A post-creation EDIT (baseCode present) uses the fully separate EDITING
+    // model set + EDITING pricing, keyed by the tier the game was generated at
+    // (stored on the package). A fresh BUILD uses the generation TIER{n}_* set +
+    // generation pricing, keyed by the tier the user picked.
+    const isEdit = Boolean(input.baseCode);
+    let models;
+    let strategy;
+    let generationAccess = null;
+    if (isEdit) {
+      const editTier = normalizeTier(input.tier ?? input.gamePackage?.generation?.qualityTier) ?? 1;
+      models = getEditingModelsForTier(editTier);
+      strategy = getEditingStrategy(editTier);
+      generationAccess = await assertEditAccess({
         creatorId,
         creatorAliases: authIdentityAliases(request.auth),
         evmWalletAddress: request.auth?.evmWalletAddress,
         tonWalletAddress: request.auth?.tonWalletAddress,
-        paymentTxHash: input.paymentTxHash
+        paymentTxHash: input.paymentTxHash,
+        tier: editTier
       });
+    } else {
+      const tier = normalizeTier(input.tier);
+      models = tier ? getModelsForTier(tier) : zeroGModels;
+      strategy = tier ? getTierStrategy(tier) : input.strategy;
+      // New builds are charged once. If the game already exists (it was priced
+      // at the routing step), skip re-charging here.
+      if (!existingGame) {
+        generationAccess = await assertGenerationAccess({
+          creatorId,
+          creatorAliases: authIdentityAliases(request.auth),
+          evmWalletAddress: request.auth?.evmWalletAddress,
+          tonWalletAddress: request.auth?.tonWalletAddress,
+          paymentTxHash: input.paymentTxHash,
+          tier
+        });
+      }
     }
     const job = startJob("code-generation", async (updateProgress) => {
-      const refinement = await createRefinementBundle(input, { onProgress: updateProgress });
+      const refinement = await createRefinementBundle(
+        { ...input, strategy, models },
+        { onProgress: updateProgress }
+      );
       // Persist the build onto the saved game: without this, the generated
       // code lived only in the requesting browser tab and was lost on reload.
       // Field-targeted update — the thumbnail job may have already written its

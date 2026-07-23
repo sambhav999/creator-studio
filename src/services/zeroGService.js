@@ -1,27 +1,21 @@
 const DEFAULT_0G_BASE_URL = "https://router-api.0g.ai/v1";
 
+// Baseline tier for internal paths that carry NO user tier choice: post-creation
+// editing, the standalone agent endpoints, and thumbnails (thumbnails use the
+// image model, which is the same in every tier). Game GENERATION never uses this
+// — there the user must pick a tier by clicking a tier button.
+const INTERNAL_TIER = 1;
+
+// Model accessor for those internal paths. There is no "legacy" model set — every
+// model comes from a tier (TIER{n}_* in .env).
 export const zeroGModels = {
-  get general() {
-    return process.env.LLM_MODEL || "0GM-1.0-35B-A3B";
-  },
-  get orchestrator() {
-    return process.env.ZERO_G_ORCHESTRATOR_MODEL || "glm-5.1";
-  },
-  get coding() {
-    return process.env.ZERO_G_CODING_MODEL || "deepseek-v4-pro";
-  },
-  get background() {
-    return process.env.ZERO_G_BACKGROUND_MODEL || "deepseek-v4-flash";
-  },
-  get image() {
-    return process.env.ZERO_G_IMAGE_MODEL || "z-image";
-  },
-  get vision() {
-    return process.env.ZERO_G_VISION_MODEL || "qwen/qwen3-vl-30b-a3b-instruct";
-  },
-  get speech() {
-    return process.env.ZERO_G_SPEECH_MODEL || "openai/whisper-large-v3";
-  }
+  get general() { return getModelsForTier(INTERNAL_TIER).general; },
+  get orchestrator() { return getModelsForTier(INTERNAL_TIER).orchestrator; },
+  get coding() { return getModelsForTier(INTERNAL_TIER).coding; },
+  get background() { return getModelsForTier(INTERNAL_TIER).background; },
+  get image() { return getModelsForTier(INTERNAL_TIER).image; },
+  get vision() { return getModelsForTier(INTERNAL_TIER).vision; },
+  get speech() { return getModelsForTier(INTERNAL_TIER).speech; }
 };
 
 export function getZeroGConfig() {
@@ -31,6 +25,125 @@ export function getZeroGConfig() {
     hasApiKey: Boolean(process.env.ZERO_G_API_KEY),
     models: zeroGModels
   };
+}
+
+// Per-tier model + strategy defaults. Every value can be overridden from .env
+// with a TIER{n}_* variable (e.g. TIER3_CODING_MODEL), so the whole tier map is
+// controllable without touching code. These defaults are the fallback used when
+// a given TIER{n}_* var is not set.
+const TIER_DEFAULTS = {
+  1: {
+    general: "0GM-1.0-35B-A3B",
+    orchestrator: "glm-5",
+    coding: "glm-5",
+    background: "deepseek-v4-flash",
+    image: "z-image-turbo",
+    vision: "qwen/qwen3-vl-30b-a3b-instruct",
+    speech: "openai/whisper-large-v3",
+    strategy: "hybrid"
+  },
+  2: {
+    general: "MiniMax-M3",
+    orchestrator: "glm-5.2",
+    coding: "gpt-5.6-terra",
+    background: "deepseek-v4-flash",
+    image: "z-image-turbo",
+    vision: "qwen3.7-plus",
+    speech: "openai/whisper-large-v3",
+    strategy: "pure-agent"
+  },
+  3: {
+    general: "MiniMax-M3",
+    orchestrator: "claude-opus-4-8",
+    coding: "claude-fable-5",
+    background: "deepseek-v4-pro",
+    image: "z-image-turbo",
+    vision: "kimi-k3",
+    speech: "openai/whisper-large-v3",
+    strategy: "pure-agent"
+  }
+};
+
+// Accepts 1|2|3, "1"|"2"|"3", or "tier2" etc. Returns 1/2/3 or null when the
+// value is absent or invalid (caller then keeps the legacy unprefixed models).
+export function normalizeTier(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const digits = String(value).match(/[123]/);
+  const tier = digits ? Number(digits[0]) : NaN;
+  return TIER_DEFAULTS[tier] ? tier : null;
+}
+
+// Resolves the seven model roles for a tier: env override first
+// (TIER{n}_CODING_MODEL, …), then the built-in default above.
+export function getModelsForTier(tier) {
+  const n = normalizeTier(tier) ?? 2;
+  const d = TIER_DEFAULTS[n];
+  const env = (suffix) => {
+    const value = process.env[`TIER${n}_${suffix}`];
+    return value && value.trim() ? value.trim() : null;
+  };
+  return {
+    tier: n,
+    general: env("LLM_MODEL") ?? d.general,
+    orchestrator: env("ORCHESTRATOR_MODEL") ?? d.orchestrator,
+    coding: env("CODING_MODEL") ?? d.coding,
+    background: env("BACKGROUND_MODEL") ?? d.background,
+    image: env("IMAGE_MODEL") ?? d.image,
+    vision: env("VISION_MODEL") ?? d.vision,
+    speech: env("SPEECH_MODEL") ?? d.speech
+  };
+}
+
+// Strategy is fixed per tier by design (Tier 1 = hybrid, Tier 2/3 = pure-agent)
+// but still overridable from .env via TIER{n}_STRATEGY.
+export function getTierStrategy(tier) {
+  const n = normalizeTier(tier) ?? 2;
+  const override = process.env[`TIER${n}_STRATEGY`];
+  const value = override && override.trim().toLowerCase();
+  if (value === "hybrid" || value === "pure-agent") return value;
+  return TIER_DEFAULTS[n].strategy;
+}
+
+// ---------------------------------------------------------------------------
+// EDITING MODELS — a fully separate, independent model set used only for
+// post-creation "wish" edits (baseCode present). Controlled from .env with
+// EDIT_TIER{n}_* variables, completely independent of the generation TIER{n}_*
+// set. Defaults: Tier 1 edits use the Tier 1 models; Tier 2 AND Tier 3 edits
+// use the Tier 2 models (edits are seed-edits, so the mid model is enough).
+// ---------------------------------------------------------------------------
+const EDIT_TIER_DEFAULTS = {
+  1: { ...TIER_DEFAULTS[1] },
+  2: { ...TIER_DEFAULTS[2] },
+  3: { ...TIER_DEFAULTS[2] }
+};
+
+// Resolves the seven editing model roles for a tier: EDIT_TIER{n}_* env first,
+// then the editing default above.
+export function getEditingModelsForTier(tier) {
+  const n = normalizeTier(tier) ?? 1;
+  const d = EDIT_TIER_DEFAULTS[n];
+  const env = (suffix) => {
+    const value = process.env[`EDIT_TIER${n}_${suffix}`];
+    return value && value.trim() ? value.trim() : null;
+  };
+  return {
+    tier: n,
+    general: env("LLM_MODEL") ?? d.general,
+    orchestrator: env("ORCHESTRATOR_MODEL") ?? d.orchestrator,
+    coding: env("CODING_MODEL") ?? d.coding,
+    background: env("BACKGROUND_MODEL") ?? d.background,
+    image: env("IMAGE_MODEL") ?? d.image,
+    vision: env("VISION_MODEL") ?? d.vision,
+    speech: env("SPEECH_MODEL") ?? d.speech
+  };
+}
+
+export function getEditingStrategy(tier) {
+  const n = normalizeTier(tier) ?? 1;
+  const override = process.env[`EDIT_TIER${n}_STRATEGY`];
+  const value = override && override.trim().toLowerCase();
+  if (value === "hybrid" || value === "pure-agent") return value;
+  return EDIT_TIER_DEFAULTS[n].strategy;
 }
 
 function getClientConfig() {
@@ -219,9 +332,9 @@ export async function callZeroGChat({
   }
 }
 
-export async function createOrchestrationPlan({ prompt, context, maxTokens = 1800, timeoutMs = 120000, retries = 2 }) {
+export async function createOrchestrationPlan({ prompt, context, maxTokens = 1800, timeoutMs = 120000, retries = 2, models = zeroGModels }) {
   return callZeroGChat({
-    model: zeroGModels.orchestrator,
+    model: models.orchestrator,
     temperature: 0.25,
     maxTokens,
     timeoutMs,
@@ -244,9 +357,9 @@ export async function createOrchestrationPlan({ prompt, context, maxTokens = 180
   });
 }
 
-export async function runBackgroundTask({ task, input }) {
+export async function runBackgroundTask({ task, input, models = zeroGModels }) {
   return callZeroGChat({
-    model: zeroGModels.background || zeroGModels.general,
+    model: models.background || models.general,
     temperature: 0.2,
     maxTokens: 2000,
     messages: [
@@ -266,7 +379,7 @@ export async function runBackgroundTask({ task, input }) {
   });
 }
 
-export async function generateImageAsset({ prompt, size = "1024x1024", n = 1 }) {
+export async function generateImageAsset({ prompt, size = "1024x1024", n = 1, models = zeroGModels }) {
   const { apiKey, baseUrl } = getClientConfig();
 
   const response = await fetch(`${baseUrl}/images/generations`, {
@@ -276,7 +389,7 @@ export async function generateImageAsset({ prompt, size = "1024x1024", n = 1 }) 
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
-      model: zeroGModels.image,
+      model: models.image,
       prompt,
       size,
       n
@@ -286,7 +399,7 @@ export async function generateImageAsset({ prompt, size = "1024x1024", n = 1 }) 
   const data = await parseJsonResponse(response);
   return {
     provider: "0g",
-    model: zeroGModels.image,
+    model: models.image,
     images: data.data ?? [],
     usage: data.usage ?? null
   };

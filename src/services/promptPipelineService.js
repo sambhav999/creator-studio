@@ -1,7 +1,7 @@
 import { templates, themePresets } from "../data/templates.js";
 import { createGamePackage } from "./gameFactoryService.js";
 import { createRefinementBundle } from "./refinementService.js";
-import { createOrchestrationPlan, generateImageAsset, runBackgroundTask } from "./zeroGService.js";
+import { createOrchestrationPlan, generateImageAsset, runBackgroundTask, getModelsForTier, getTierStrategy, normalizeTier, zeroGModels } from "./zeroGService.js";
 import { nanoid } from "nanoid";
 
 const defaultOptions = {
@@ -93,7 +93,7 @@ function normalizeSelection(selection, prompt) {
 
 // One background call does both routing and variation design — the previous
 // two sequential round-trips added 20-40s of latency and a second failure point.
-async function routeAndVaryWithAgent({ prompt, context, generationId }) {
+async function routeAndVaryWithAgent({ prompt, context, generationId, models = zeroGModels }) {
   const localRecommendation = localTemplateSelection(prompt);
   const templateSummaries = templates.map(template => ({
     id: template.id,
@@ -129,7 +129,8 @@ async function routeAndVaryWithAgent({ prompt, context, generationId }) {
       recentCreations: context?.recentCreations ?? [],
       instruction:
         "Avoid titles, color palettes, tuning combinations, obstacle patterns, scoring rules, and thumbnail compositions used by recentCreations."
-    }
+    },
+    models
   });
 
   const parsed = extractJsonObject(result.content) ?? {};
@@ -221,13 +222,14 @@ function createFallbackThumbnail(game, generationId) {
   return `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`;
 }
 
-async function generateSpecsWithAgent(prompt, context) {
+async function generateSpecsWithAgent(prompt, context, models = zeroGModels) {
   const result = await runBackgroundTask({
     task: "Design complete custom browser game specifications from scratch based on the user prompt. Do NOT use templates. Decide the title, category, mechanic, controls, tuning (parameters object), mood, colors (array of hex colors), assets. Return ONLY a JSON object containing: title, category, mechanic, controls, tuning, mood, colors, assets.",
     input: {
       prompt,
       context: context ?? null
-    }
+    },
+    models
   });
 
   const parsed = extractJsonObject(result.content);
@@ -256,7 +258,8 @@ export async function generateGameFromPrompt({
   includePlan = true,
   includeCode = true,
   includeAssets = true,
-  strategy = "hybrid"
+  strategy = "hybrid",
+  tier
 }) {
   const warnings = [];
   const generationId = nanoid(16);
@@ -264,9 +267,21 @@ export async function generateGameFromPrompt({
   let selection = null;
   let game = null;
 
+  // The tier OWNS both the model set and the strategy — the client-sent
+  // `strategy` is ignored so a free/Tier-1 request can't force a premium
+  // pure-agent build. A tier is required: the user picks it in the UI.
+  const resolvedTier = normalizeTier(tier);
+  if (!resolvedTier) {
+    const error = new Error("A tier (1, 2, or 3) is required to generate a game.");
+    error.status = 400;
+    throw error;
+  }
+  const models = getModelsForTier(resolvedTier);
+  strategy = getTierStrategy(resolvedTier);
+
   if (strategy === "pure-agent") {
     try {
-      const design = await generateSpecsWithAgent(prompt, context);
+      const design = await generateSpecsWithAgent(prompt, context, models);
       const specs = design.specs;
       
       game = {
@@ -341,7 +356,7 @@ export async function generateGameFromPrompt({
   if (strategy !== "pure-agent") {
     let rawVariation = null;
     try {
-      routing = await routeAndVaryWithAgent({ prompt, context, generationId });
+      routing = await routeAndVaryWithAgent({ prompt, context, generationId, models });
       selection = routing.selection;
       rawVariation = routing.rawVariation;
     } catch (error) {
@@ -390,6 +405,8 @@ export async function generateGameFromPrompt({
     selection,
     routingModel: routing?.agent?.model ?? null,
     generationId,
+    qualityTier: resolvedTier ?? null,
+    strategy,
   };
 
   let plan = null;
@@ -412,7 +429,8 @@ export async function generateGameFromPrompt({
         },
         maxTokens: 800,
         timeoutMs: 45000,
-        retries: 0
+        retries: 0,
+        models
       });
       plan = pureAgentPlan;
       game.generation.planModel = pureAgentPlan.model;
@@ -428,7 +446,8 @@ export async function generateGameFromPrompt({
           ...(context ?? {}),
           selectedTemplate: selection,
           gamePackage: game
-        }
+        },
+        models
       })
     : null;
 
@@ -440,7 +459,8 @@ export async function generateGameFromPrompt({
         request: prompt,
         refinementLevel: selection.customization,
         strategy,
-        plan: pureAgentPlan?.content ?? null
+        plan: pureAgentPlan?.content ?? null,
+        models
       })
     : null;
   const assetsPromise = includeAssets
@@ -452,7 +472,8 @@ export async function generateGameFromPrompt({
           game.generation?.variation?.thumbnailConcept,
           `unique generation fingerprint ${generationId}`,
           "polished colorful game cover art, clear gameplay subject, no text, do not reuse a previous composition"
-        ].filter(Boolean).join(", ")
+        ].filter(Boolean).join(", "),
+        models
       })
     : null;
 

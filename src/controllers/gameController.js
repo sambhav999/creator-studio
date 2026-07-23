@@ -45,6 +45,7 @@ const promptGenerateSchema = z.object({
   includeCode: z.boolean().optional(),
   includeAssets: z.boolean().optional(),
   strategy: z.enum(["hybrid", "pure-agent"]).optional(),
+  tier: z.coerce.number().int().min(1).max(3),
   paymentTxHash: z.string().min(1).optional(),
   userId: z.string().optional()
 }).strict();
@@ -111,7 +112,8 @@ export async function checkGenerationAccess(request, response, next) {
       creatorAliases: authIdentityAliases(request.auth),
       evmWalletAddress: request.auth?.evmWalletAddress,
       tonWalletAddress: request.auth?.tonWalletAddress,
-      paymentTxHash: request.query.paymentTxHash
+      paymentTxHash: request.query.paymentTxHash,
+      tier: request.query.tier
     });
     response.json({
       ok: true,
@@ -397,14 +399,20 @@ export async function generateGame(request, response, next) {
   try {
     const input = promptGenerateSchema.parse(request.body);
     const creatorId = request.auth?.userId ?? "anonymous";
+    // The tier (required — the user picks it in the UI) owns pricing AND the
+    // model/strategy set. The same value gates the price and drives generation,
+    // so what is charged always matches what is built. Client-sent model/strategy
+    // is never trusted.
+    const tier = input.tier;
     const generationAccess = await assertGenerationAccess({
       creatorId,
       creatorAliases: authIdentityAliases(request.auth),
       evmWalletAddress: request.auth?.evmWalletAddress,
       tonWalletAddress: request.auth?.tonWalletAddress,
-      paymentTxHash: input.paymentTxHash
+      paymentTxHash: input.paymentTxHash,
+      tier
     });
-    const result = await generateGameFromPrompt(input);
+    const result = await generateGameFromPrompt({ ...input, tier });
     // Attribute the game to its creator so follows and profile stats are real.
     result.game.creatorId = creatorId;
     result.game.generationAccess = generationAccessMetadata(generationAccess);

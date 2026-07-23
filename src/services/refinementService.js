@@ -149,7 +149,7 @@ function missingRuntimeFeatures(code) {
 const SCRATCH_CHAR_TARGET = 15000;
 const SCRATCH_MAX_TOKENS = 6144;
 
-async function generateWithModel(promptBundle, model, onProgress) {
+async function generateWithModel(promptBundle, model, onProgress, models = zeroGModels) {
   // Single-stage unified code generation for maximum speed
   const response = await callCodingStage({
     model,
@@ -181,7 +181,7 @@ async function generateWithModel(promptBundle, model, onProgress) {
   const missing = missingRuntimeFeatures(generatedCode);
   if (missing.length > 0) {
     const repair = await callCodingStage({
-      model: zeroGModels.background,
+      model: models.background,
       maxTokens: SCRATCH_MAX_TOKENS,
       onChunk: (chars) => onProgress?.({ stage: "repairing", chars }),
       system: [
@@ -196,7 +196,7 @@ async function generateWithModel(promptBundle, model, onProgress) {
     });
     const repairedCode = stripModuleExports(stripMarkdownFence(repair.content));
     usages.push(repair.usage);
-    stages.repair = { model: zeroGModels.background, usage: repair.usage };
+    stages.repair = { model: models.background, usage: repair.usage };
     // Only adopt the repair when it actually closes gaps.
     if (missingRuntimeFeatures(repairedCode).length < missing.length) {
       generatedCode = repairedCode;
@@ -242,7 +242,7 @@ function hardBrokenReason(code, gamePackage) {
 // Each attempt feeds the exact current error back to the agent and asks it to
 // fix ONLY that while keeping the existing gameplay and the creator's change.
 // Escalates to the stronger coding model after the first cheap attempt.
-async function repairEditedModule(code, promptBundle, gamePackage, onProgress, maxAttempts = 3) {
+async function repairEditedModule(code, promptBundle, gamePackage, onProgress, maxAttempts = 3, models = zeroGModels) {
   let current = code;
   const usages = [];
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -253,7 +253,7 @@ async function repairEditedModule(code, promptBundle, gamePackage, onProgress, m
     // let the caller ship the edit rather than burning more time/tokens.
     if (!hard && attempt > 1) break;
     const repair = await callCodingStage({
-      model: attempt === 1 ? zeroGModels.background : zeroGModels.coding,
+      model: attempt === 1 ? models.background : models.coding,
       maxTokens: 16384,
       onChunk: (chars) => onProgress?.({ stage: "repairing", chars }),
       system: [
@@ -275,7 +275,7 @@ async function repairEditedModule(code, promptBundle, gamePackage, onProgress, m
 // it is REPAIRED in place (multiple attempts, keeping the creator's change) —
 // never regenerated from scratch. Only if repair cannot make it run does the
 // previous working build ship unchanged.
-async function generateFromSeed(promptBundle, seedCode, model, onProgress, gamePackage) {
+async function generateFromSeed(promptBundle, seedCode, model, onProgress, gamePackage, models = zeroGModels) {
   const integration = await callCodingStage({
     model,
     maxTokens: 12000,
@@ -296,7 +296,7 @@ async function generateFromSeed(promptBundle, seedCode, model, onProgress, gameP
 
   // Repair in place if anything looks wrong — never regenerate from scratch.
   if (moduleProblem(generatedCode, gamePackage)) {
-    const repaired = await repairEditedModule(generatedCode, promptBundle, gamePackage, onProgress, 3);
+    const repaired = await repairEditedModule(generatedCode, promptBundle, gamePackage, onProgress, 3, models);
     usages.push(repaired.usage);
     // Keep the repaired code as long as it isn't WORSE than where we started.
     if (!hardBrokenReason(repaired.code, gamePackage) || repaired.ok) generatedCode = repaired.code;
@@ -329,33 +329,33 @@ async function generateFromSeed(promptBundle, seedCode, model, onProgress, gameP
   };
 }
 
-async function call0GAgent(promptBundle, onProgress) {
+async function call0GAgent(promptBundle, onProgress, models = zeroGModels) {
   try {
-    return await generateWithModel(promptBundle, zeroGModels.coding, onProgress);
+    return await generateWithModel(promptBundle, models.coding, onProgress, models);
   } catch (error) {
-    const fallbackModel = zeroGModels.background;
+    const fallbackModel = models.background;
     const nonRetriable = error.status && error.status < 500 && ![408, 429].includes(error.status);
-    if (fallbackModel === zeroGModels.coding || nonRetriable) throw error;
+    if (fallbackModel === models.coding || nonRetriable) throw error;
 
     console.warn("0G coding model failed after retries; using fallback", {
-      primaryModel: zeroGModels.coding,
+      primaryModel: models.coding,
       fallbackModel,
       message: error.message
     });
-    return generateWithModel(promptBundle, fallbackModel, onProgress);
+    return generateWithModel(promptBundle, fallbackModel, onProgress, models);
   }
 }
 
 // Broken syntax means a black screen in the sandbox. One cheap repair attempt
 // on the fast model fixes most cases; a seed-backed game falls back to the
 // working reference if the repair fails too.
-async function ensureValidSyntax(generated, promptBundle, reference, onProgress) {
+async function ensureValidSyntax(generated, promptBundle, reference, onProgress, models = zeroGModels) {
   let syntaxError = findSyntaxError(generated.generatedCode);
   if (!syntaxError) return generated;
 
   try {
     const repair = await callCodingStage({
-      model: zeroGModels.background,
+      model: models.background,
       maxTokens: 16384,
       onChunk: (chars) => onProgress?.({ stage: "fixing-syntax", chars }),
       system: [
@@ -371,7 +371,7 @@ async function ensureValidSyntax(generated, promptBundle, reference, onProgress)
         ...generated,
         generatedCode: fixed,
         usage: sumUsage([generated.usage, repair.usage]),
-        stages: { ...generated.stages, syntaxRepair: { model: zeroGModels.background, usage: repair.usage } }
+        stages: { ...generated.stages, syntaxRepair: { model: models.background, usage: repair.usage } }
       };
     }
     syntaxError = findSyntaxError(fixed) ?? syntaxError;
@@ -400,13 +400,13 @@ async function ensureValidSyntax(generated, promptBundle, reference, onProgress)
 // player "Generated build failed to run…". Run the module in a mocked browser;
 // if it throws, repair it with the runtime error, then re-test. A seed-backed
 // game falls back to the working reference if the repair still crashes.
-async function ensureRuntimeRuns(generated, promptBundle, gamePackage, reference, onProgress) {
+async function ensureRuntimeRuns(generated, promptBundle, gamePackage, reference, onProgress, models = zeroGModels) {
   let result = runtimeSmokeTest(generated.generatedCode, gamePackage);
   if (result.ok) return generated;
 
   try {
     const repair = await callCodingStage({
-      model: zeroGModels.background,
+      model: models.background,
       maxTokens: 16384,
       onChunk: (chars) => onProgress?.({ stage: "fixing-runtime", chars }),
       system: [
@@ -424,7 +424,7 @@ async function ensureRuntimeRuns(generated, promptBundle, gamePackage, reference
         ...generated,
         generatedCode: fixed,
         usage: sumUsage([generated.usage, repair.usage]),
-        stages: { ...generated.stages, runtimeRepair: { model: zeroGModels.background, usage: repair.usage } }
+        stages: { ...generated.stages, runtimeRepair: { model: models.background, usage: repair.usage } }
       };
     }
     result = runtimeSmokeTest(fixed, gamePackage).ok ? { ok: true } : result;
@@ -449,7 +449,7 @@ async function ensureRuntimeRuns(generated, promptBundle, gamePackage, reference
 }
 
 export async function createRefinementBundle(
-  { gamePackage, request, refinementLevel, strategy, baseCode, plan },
+  { gamePackage, request, refinementLevel, strategy, baseCode, plan, models = zeroGModels },
   { onProgress } = {}
 ) {
   if (!gamePackage) {
@@ -474,7 +474,7 @@ export async function createRefinementBundle(
   let generated;
   if (reference && (baseCode || strategy !== "pure-agent")) {
     try {
-      generated = await generateFromSeed(promptBundle, reference.code, zeroGModels.coding, onProgress, gamePackage);
+      generated = await generateFromSeed(promptBundle, reference.code, models.coding, onProgress, gamePackage, models);
     } catch (error) {
       // Agent unreachable — ship the working reference unchanged so the user still gets a game.
       generated = {
@@ -488,17 +488,17 @@ export async function createRefinementBundle(
       };
     }
   } else {
-    generated = await call0GAgent(promptBundle, onProgress);
+    generated = await call0GAgent(promptBundle, onProgress, models);
     generated.source = generated.source ?? "agent";
   }
 
   if (generated.source !== "seed-fallback") {
     const fallbackRef = strategy !== "pure-agent" ? reference : null;
-    generated = await ensureValidSyntax(generated, promptBundle, fallbackRef, onProgress);
+    generated = await ensureValidSyntax(generated, promptBundle, fallbackRef, onProgress, models);
     // Syntax-clean code can still crash on its first run — verify it actually
     // executes and repair/fall back if not.
     if (generated.source !== "seed-fallback") {
-      generated = await ensureRuntimeRuns(generated, promptBundle, gamePackage, fallbackRef, onProgress);
+      generated = await ensureRuntimeRuns(generated, promptBundle, gamePackage, fallbackRef, onProgress, models);
     }
   }
 
