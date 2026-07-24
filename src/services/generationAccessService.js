@@ -3,7 +3,7 @@ import { countCreatedGamePackagesByCreator } from "./databaseService.js";
 import { verifyAndRecordGenerationPayment } from "./zeroGPaymentService.js";
 import { verifyAndRecordTonGenerationPayment } from "./tonPaymentService.js";
 import { normalizeTier } from "./zeroGService.js";
-import { consumeGenerationStarsOrder, generationStarsPrice, starsPaymentAvailable } from "./telegramStarsService.js";
+import { consumeGenerationStarsOrder, generationStarsPrice, starsPaymentAvailable, consumeEditStarsOrder, editStarsPrice } from "./telegramStarsService.js";
 
 // Reads a non-negative number from env, else the given fallback.
 function envPrice(name, fallback) {
@@ -229,25 +229,36 @@ export async function assertEditAccess({
   paymentTxHash,
   evmWalletAddress,
   tonWalletAddress,
-  tier
+  tier,
+  paymentMethod,
+  starsOrderId,
+  auth
 }) {
   const requirement = editingPaymentDetails(tier);
+  const starsAmount = editStarsPrice(tier);
 
   if (hasUnlimitedAccess({ creatorId, creatorAliases, evmWalletAddress, tonWalletAddress })) {
     return { free: true, editing: true, currency: requirement.currency, amount: 0, tier: requirement.tier, unlimited: true };
   }
 
-  // Free editing (price 0) — the default.
+  // The chain (TON/0G) edit price is the gate. 0 = editing is FREE for that tier
+  // (the default), regardless of method. Set it > 0 to charge; Stars then becomes
+  // an alternative way to pay the same gate.
   if (!requirement.amount || requirement.amount <= 0) {
     return { free: true, editing: true, currency: requirement.currency, amount: 0, tier: requirement.tier };
   }
 
+  // Paid edit — Stars path consumes a prepaid edit order.
+  if (paymentMethod === "stars" || (starsOrderId && paymentMethod !== "ton" && paymentMethod !== "0g")) {
+    if (!starsOrderId) {
+      throw editAccessError({ requirement, starsAmount });
+    }
+    const payment = await consumeEditStarsOrder({ auth, orderId: starsOrderId, tier });
+    return { free: false, editing: true, currency: "XTR", amount: payment.starsAmount, tier: requirement.tier, paymentMethod: "stars", starsOrderId, payment };
+  }
+
   if (!paymentTxHash) {
-    const error = new Error(`Editing on this tier costs ${requirement.amount} ${requirement.currency}.`);
-    error.status = 402;
-    error.code = "PAID_EDIT_REQUIRED";
-    error.payment = { required: true, currency: requirement.currency, amount: requirement.amount, editing: true };
-    throw error;
+    throw editAccessError({ requirement, starsAmount });
   }
 
   const payment = requirement.currency === "0G"
@@ -255,6 +266,28 @@ export async function assertEditAccess({
     : await verifyAndRecordTonGenerationPayment({ reference: paymentTxHash, creatorId: tonWalletAddress ?? creatorId, amountTon: requirement.amount });
 
   return { free: false, editing: true, currency: requirement.currency, amount: requirement.amount, tier: requirement.tier, paymentTxHash, payment };
+}
+
+// 402 for a paid edit, advertising both TON/0G and Stars options.
+function editAccessError({ requirement, starsAmount }) {
+  const parts = [];
+  if (requirement.amount > 0) parts.push(`${requirement.amount} ${requirement.currency}`);
+  if (starsAmount > 0) parts.push(`${starsAmount} Stars`);
+  const error = new Error(`This edit costs ${parts.join(" or ")}.`);
+  error.status = 402;
+  error.code = "PAID_EDIT_REQUIRED";
+  error.payment = {
+    required: true,
+    editing: true,
+    currency: requirement.currency,
+    amount: requirement.amount,
+    tier: requirement.tier,
+    methods: {
+      chain: requirement.amount > 0 ? { method: requirement.currency === "0G" ? "0g" : "ton", currency: requirement.currency, amount: requirement.amount } : null,
+      stars: starsAmount > 0 ? { method: "stars", currency: "XTR", amount: starsAmount, available: starsPaymentAvailable() } : null
+    }
+  };
+  return error;
 }
 
 export function generationAccessMetadata(generationAccess) {

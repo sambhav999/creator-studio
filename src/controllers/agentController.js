@@ -112,6 +112,9 @@ export async function generateCode(request, response, next) {
         evmWalletAddress: request.auth?.evmWalletAddress,
         tonWalletAddress: request.auth?.tonWalletAddress,
         paymentTxHash: input.paymentTxHash,
+        paymentMethod: input.paymentMethod,
+        starsOrderId: input.starsOrderId,
+        auth: request.auth,
         tier: editTier
       });
     } else {

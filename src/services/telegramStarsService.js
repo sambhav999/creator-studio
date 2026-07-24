@@ -12,6 +12,8 @@ const PRODUCT_DESCRIPTION = "48 hours of additional distribution for one publish
 
 const GENERATION_PRODUCT_CODE = "game_generation";
 const GENERATION_PRODUCT_TITLE = "Game Generation";
+const EDIT_PRODUCT_CODE = "game_edit";
+const EDIT_PRODUCT_TITLE = "Game Edit";
 
 // Built-in Stars price per tier (Telegram Stars = "XTR"). Overridable via
 // PAID_GAME_PRICE_STARS_TIER{n}. Telegram requires a positive integer amount.
@@ -21,6 +23,13 @@ export function generationStarsPrice(tier) {
   const n = [1, 2, 3].includes(Number(tier)) ? Number(tier) : 1;
   const value = Number(process.env[`PAID_GAME_PRICE_STARS_TIER${n}`]);
   return Number.isFinite(value) && value > 0 ? Math.round(value) : DEFAULT_STARS_PRICE[n];
+}
+
+// Editing Stars price per tier. Default 0 = editing is free (no Stars charge).
+export function editStarsPrice(tier) {
+  const n = [1, 2, 3].includes(Number(tier)) ? Number(tier) : 1;
+  const value = Number(process.env[`EDIT_PRICE_STARS_TIER${n}`]);
+  return Number.isFinite(value) && value >= 0 ? Math.round(value) : 0;
 }
 
 export function starsPaymentAvailable() {
@@ -179,28 +188,32 @@ export async function getStarOrder({ auth, orderId }) {
   return publicOrder(order);
 }
 
-// Creates a Telegram Stars invoice to pay for ONE game generation on a tier.
-// Unlike Launch Boost there is no on-payment fulfillment — the order is simply
-// marked PAID by the webhook, then consumed when the generation runs.
-export async function createGenerationStarsOrder({ auth, tier }) {
+// Creates a Telegram Stars invoice for a consumable product (generation or
+// edit) on a tier. Unlike Launch Boost there is no on-payment fulfillment — the
+// order is marked PAID by the webhook, then consumed when the work runs.
+async function createConsumableStarsOrder({ auth, tier, productCode, productTitle, productDescription, starsAmount }) {
   assertTelegramBuyer(auth);
   const t = [1, 2, 3].includes(Number(tier)) ? Number(tier) : 1;
-  const starsAmount = generationStarsPrice(t);
+  if (!Number.isFinite(starsAmount) || starsAmount <= 0) {
+    const error = new Error("This action is free — no Stars payment is required.");
+    error.status = 400;
+    throw error;
+  }
   const now = new Date();
   const order = {
     id: `star_order_${nanoid(16)}`,
     userId: auth.userId,
     telegramUserId: String(auth.telegramUserId),
-    productCode: GENERATION_PRODUCT_CODE,
-    productTitle: GENERATION_PRODUCT_TITLE,
-    productDescription: `Generate one Tier ${t} game on KULT.`,
+    productCode,
+    productTitle,
+    productDescription,
     tier: t,
     gameId: null,
     gameTitle: null,
     status: "CREATED",
     currency: "XTR",
-    starsAmount,
-    invoicePayload: `game_generation:${auth.telegramUserId}:${t}:${nanoid(18)}`,
+    starsAmount: Math.round(starsAmount),
+    invoicePayload: `${productCode}:${auth.telegramUserId}:${t}:${nanoid(18)}`,
     invoiceUrl: null,
     telegramPaymentChargeId: null,
     providerPaymentChargeId: null,
@@ -231,14 +244,14 @@ export async function createGenerationStarsOrder({ auth, tier }) {
   return publicOrder({ ...order, invoiceUrl, status: "INVOICE_CREATED" });
 }
 
-// Atomically verifies a PAID generation order belongs to this user and matches
-// the tier, then marks it consumed so one payment yields exactly one game. Throws
-// a 402 if it isn't paid yet, 403 if it isn't the caller's, 409 if already used.
-export async function consumeGenerationStarsOrder({ auth, orderId, tier }) {
+// Atomically verifies a PAID consumable order belongs to this user, matches the
+// product and tier, then marks it consumed so one payment yields exactly one
+// action. 402 if not paid yet, 403 if not the caller's, 409 if already used.
+async function consumeConsumableStarsOrder({ auth, orderId, tier, productCode }) {
   const { orders } = await collections();
   const order = await orders.findOne({ id: orderId }, { projection: { _id: 0 } });
-  if (!order || order.productCode !== GENERATION_PRODUCT_CODE) {
-    const error = new Error("Stars generation order not found");
+  if (!order || order.productCode !== productCode) {
+    const error = new Error("Stars order not found");
     error.status = 404;
     throw error;
   }
@@ -257,7 +270,7 @@ export async function consumeGenerationStarsOrder({ auth, orderId, tier }) {
     throw error;
   }
   if (order.status === "FULFILLED" || order.consumedAt) {
-    const error = new Error("This Stars payment was already used for a game.");
+    const error = new Error("This Stars payment was already used.");
     error.status = 409;
     throw error;
   }
@@ -267,7 +280,6 @@ export async function consumeGenerationStarsOrder({ auth, orderId, tier }) {
     error.code = "STARS_PAYMENT_PENDING";
     throw error;
   }
-  // Atomic consume: only the first request that flips PAID→FULFILLED wins.
   const result = await orders.findOneAndUpdate(
     { id: order.id, status: "PAID" },
     { $set: { status: "FULFILLED", consumedAt: new Date(), updatedAt: new Date() } },
@@ -275,7 +287,7 @@ export async function consumeGenerationStarsOrder({ auth, orderId, tier }) {
   );
   const updated = result?.value ?? result;
   if (!updated || updated.status !== "FULFILLED") {
-    const error = new Error("This Stars payment was already used for a game.");
+    const error = new Error("This Stars payment was already used.");
     error.status = 409;
     throw error;
   }
@@ -285,6 +297,38 @@ export async function consumeGenerationStarsOrder({ auth, orderId, tier }) {
     starsAmount: order.starsAmount,
     telegramPaymentChargeId: order.telegramPaymentChargeId
   };
+}
+
+export function createGenerationStarsOrder({ auth, tier }) {
+  const t = [1, 2, 3].includes(Number(tier)) ? Number(tier) : 1;
+  return createConsumableStarsOrder({
+    auth,
+    tier: t,
+    productCode: GENERATION_PRODUCT_CODE,
+    productTitle: GENERATION_PRODUCT_TITLE,
+    productDescription: `Generate one Tier ${t} game on KULT.`,
+    starsAmount: generationStarsPrice(t)
+  });
+}
+
+export function consumeGenerationStarsOrder({ auth, orderId, tier }) {
+  return consumeConsumableStarsOrder({ auth, orderId, tier, productCode: GENERATION_PRODUCT_CODE });
+}
+
+export function createEditStarsOrder({ auth, tier }) {
+  const t = [1, 2, 3].includes(Number(tier)) ? Number(tier) : 1;
+  return createConsumableStarsOrder({
+    auth,
+    tier: t,
+    productCode: EDIT_PRODUCT_CODE,
+    productTitle: EDIT_PRODUCT_TITLE,
+    productDescription: `Apply one AI edit to a Tier ${t} game on KULT.`,
+    starsAmount: editStarsPrice(t)
+  });
+}
+
+export function consumeEditStarsOrder({ auth, orderId, tier }) {
+  return consumeConsumableStarsOrder({ auth, orderId, tier, productCode: EDIT_PRODUCT_CODE });
 }
 
 async function answerPreCheckoutQuery(query, ok, errorMessage) {
