@@ -7,6 +7,7 @@ import {
 import { getJob, serializeJob, startJob } from "../services/jobService.js";
 import { createRefinementBundle } from "../services/refinementService.js";
 import { assertGenerationAccess, assertEditAccess, generationAccessMetadata } from "../services/generationAccessService.js";
+import { recordPaymentReceipt, recordGameVersion, recordReferenceInput, recordVoiceInput } from "../services/zeroGProvenanceService.js";
 import { authIdentityAliases, authOwnsIdentity } from "../services/identityAliasService.js";
 import {
   analyzeReferenceImage,
@@ -137,11 +138,22 @@ export async function generateCode(request, response, next) {
         });
       }
     }
+    // 0G receipt for a paid build/edit (whitelisted/free requests record nothing).
+    if (generationAccess && !generationAccess.free) {
+      recordPaymentReceipt({
+        creatorId,
+        gameId: input.gamePackage?.id ?? null,
+        tier: isEdit ? (normalizeTier(input.tier ?? input.gamePackage?.generation?.qualityTier) ?? 1) : normalizeTier(input.tier),
+        access: generationAccess
+      });
+    }
     const job = startJob("code-generation", async (updateProgress) => {
       const refinement = await createRefinementBundle(
         { ...input, strategy, models },
         { onProgress: updateProgress }
       );
+      // 0G: record this build/edit as an immutable game version.
+      recordGameVersion({ game: input.gamePackage, refinement, kind: isEdit ? "edit" : "build" });
       // Persist the build onto the saved game: without this, the generated
       // code lived only in the requesting browser tab and was lost on reload.
       // Field-targeted update — the thumbnail job may have already written its
@@ -222,6 +234,14 @@ export async function analyzeReference(request, response, next) {
   try {
     const input = visionSchema.parse(request.body);
     const result = await analyzeReferenceImage(input);
+    // 0G: record the reference image + its analysis used during creation.
+    recordReferenceInput({
+      creatorId: request.auth?.userId ?? null,
+      prompt: input.prompt,
+      imageUrl: input.imageUrl,
+      hasImageData: Boolean(input.imageBase64),
+      analysis: result?.content ?? null
+    });
     response.json({ task: "vision-reference", result });
   } catch (error) {
     next(error);
@@ -232,6 +252,8 @@ export async function transcribeVoice(request, response, next) {
   try {
     const input = speechSchema.parse(request.body);
     const result = await transcribeAudio(input);
+    // 0G: record the voice transcription used during creation.
+    recordVoiceInput({ creatorId: request.auth?.userId ?? null, text: result?.text, language: input.language });
     response.json({ task: "speech-to-text", result });
   } catch (error) {
     next(error);

@@ -17,6 +17,7 @@ import { putBufferOnZeroG } from "../services/zeroGStorage.js";
 import { awardFirstGameBonus, recordCreatorGamePublished } from "../services/pointsService.js";
 import { notifyFollowersOfPublish } from "../services/socialService.js";
 import { assertGenerationAccess, generationAccessMetadata } from "../services/generationAccessService.js";
+import { recordPaymentReceipt, recordGenerationProvenance, recordPublishedSnapshot } from "../services/zeroGProvenanceService.js";
 import {
   authIdentityAliases,
   authOwnsIdentity,
@@ -190,6 +191,8 @@ export async function publishGame(request, response, next) {
       playPath: `/studio/play/${game.id}`
     };
     await updateGamePackageFields(game.id, { publish });
+    // 0G: pin an immutable snapshot of the exact build being published.
+    recordPublishedSnapshot({ game: { ...game, publish } });
     await logActivity({
       userId: request.auth?.userId,
       gameId: game.id,
@@ -381,6 +384,7 @@ export async function createGame(request, response, next) {
     const game = createGamePackage(input);
     game.creatorId = creatorId;
     game.generationAccess = generationAccessMetadata(generationAccess);
+    recordPaymentReceipt({ creatorId, gameId: game.id, tier: null, access: generationAccess });
     const persistence = await saveGamePackage(game);
     if (game.creatorId) {
       await logActivity({
@@ -421,6 +425,9 @@ export async function generateGame(request, response, next) {
     // Attribute the game to its creator so follows and profile stats are real.
     result.game.creatorId = creatorId;
     result.game.generationAccess = generationAccessMetadata(generationAccess);
+    // 0G provenance: how the game was made + a receipt if it was paid.
+    recordGenerationProvenance({ game: result.game });
+    recordPaymentReceipt({ creatorId, gameId: result.game.id, tier, access: generationAccess });
     result.game.publish = {
       ...(result.game.publish ?? {}),
       published: false,

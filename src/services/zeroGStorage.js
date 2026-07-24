@@ -98,9 +98,7 @@ export function isZeroGStorageConfigured() {
   return config.enabled && config.configured;
 }
 
-async function uploadToZeroG({ buffer }) {
-  if (!isZeroGStorageConfigured()) return null;
-
+async function doUploadToZeroG(buffer) {
   const { indexerRpc, evmRpc, privateKey, expectedReplica } = storageEnv();
   const provider = new ethers.JsonRpcProvider(evmRpc);
   const signer = new ethers.Wallet(privateKey, provider);
@@ -119,6 +117,20 @@ async function uploadToZeroG({ buffer }) {
     ...parseUploadResult(result, tree?.rootHash?.() ?? null),
     raw: result
   };
+}
+
+// All uploads sign from the SAME wallet, so running them concurrently collides
+// on the account nonce ("replacement fee too low"). Serialize every on-chain
+// upload through a single promise chain so nonces stay sequential. Uploads are
+// background/fire-and-forget, so the added latency is acceptable.
+let uploadChain = Promise.resolve();
+
+async function uploadToZeroG({ buffer }) {
+  if (!isZeroGStorageConfigured()) return null;
+  const run = uploadChain.then(() => doUploadToZeroG(buffer), () => doUploadToZeroG(buffer));
+  // Keep the chain alive regardless of this upload's outcome.
+  uploadChain = run.then(() => undefined, () => undefined);
+  return run;
 }
 
 function unconfiguredReason() {

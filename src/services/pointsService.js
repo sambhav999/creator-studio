@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { getDatabase, getDatabaseByName, getGameCollection } from "./databaseService.js";
+import { recordPointsLedgerEvent } from "./zeroGProvenanceService.js";
 
 export const POINT_VALUES = Object.freeze({
   playerPlay: 10,
@@ -194,7 +195,10 @@ async function insertLedgerEvent(collection, event) {
     { $setOnInsert: event },
     { upsert: true },
   );
-  return Boolean(insertResult.upsertedCount);
+  const inserted = Boolean(insertResult.upsertedCount);
+  // 0G: mirror each NEW points event to an immutable ledger record.
+  if (inserted) recordPointsLedgerEvent(event);
+  return inserted;
 }
 
 async function checkBotSignals({ userId, action, ip, deviceId, now = new Date() }) {

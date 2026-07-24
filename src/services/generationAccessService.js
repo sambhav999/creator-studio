@@ -116,22 +116,41 @@ function hasUnlimitedAccess({ creatorId, creatorAliases, evmWalletAddress, tonWa
   return matched;
 }
 
-// 402 with BOTH payment options so the client can let the user choose: pay in
-// the on-chain currency (TON/0G) or in Telegram Stars.
-function generationAccessError({ amount, currency, existingGames, tier, starsAmount }) {
-  const error = new Error(`You already generated your free game. Generate another game for ${amount} ${currency} or ${starsAmount} Stars.`);
+// Auto-detects which payment methods a user can actually use, from their
+// connected identity: a TON wallet → TON, an EVM wallet → 0G, a Telegram login
+// → Stars. `chain` is the primary on-chain method (TON preferred, else 0G, else
+// the global default) so older clients that read a single method keep working.
+function buildGenerationMethods({ tier, evmWalletAddress, tonWalletAddress, telegramUserId }) {
+  const ton = tonWalletAddress ? { method: "ton", currency: "TON", amount: paidGenerationPriceTON(tier) } : null;
+  const zerog = evmWalletAddress ? { method: "0g", currency: "0G", amount: paidGenerationPrice0G(tier) } : null;
+  const starsAmount = generationStarsPrice(tier);
+  const stars = (telegramUserId && starsPaymentAvailable() && starsAmount > 0)
+    ? { method: "stars", currency: "XTR", amount: starsAmount, available: true }
+    : null;
+  let chain = ton ?? zerog;
+  if (!chain) {
+    const d = paymentDetails(tier);
+    chain = { method: d.currency === "0G" ? "0g" : "ton", currency: d.currency, amount: d.amount };
+  }
+  return { chain, ton, "0g": zerog, stars };
+}
+
+// 402 advertising exactly the methods this user can pay with.
+function generationAccessError({ existingGames, tier, methods }) {
+  const options = [methods.ton, methods["0g"], methods.stars]
+    .filter(Boolean)
+    .map((m) => `${m.amount} ${m.currency}`);
+  if (options.length === 0) options.push(`${methods.chain.amount} ${methods.chain.currency}`);
+  const error = new Error(`You already generated your free game. Generate another for ${options.join(" or ")}.`);
   error.status = 402;
   error.code = "PAID_GENERATION_REQUIRED";
   error.payment = {
     required: true,
-    currency,
-    amount,
+    currency: methods.chain.currency,
+    amount: methods.chain.amount,
     tier: normalizeTier(tier),
     existingGames,
-    methods: {
-      chain: { method: currency === "0G" ? "0g" : "ton", currency, amount },
-      stars: { method: "stars", currency: "XTR", amount: starsAmount, available: starsPaymentAvailable() }
-    }
+    methods
   };
   return error;
 }
@@ -148,7 +167,6 @@ export async function assertGenerationAccess({
   auth
 }) {
   const paymentRequirement = paymentDetails(tier);
-  const starsAmount = generationStarsPrice(tier);
 
   // Whitelisted wallets bypass counting AND payment: unlimited free games, any tier.
   if (hasUnlimitedAccess({ creatorId, creatorAliases, evmWalletAddress, tonWalletAddress })) {
@@ -174,10 +192,13 @@ export async function assertGenerationAccess({
     };
   }
 
-  // Paid path — the user chose a method. Stars: consume a prepaid Telegram order.
+  // Methods this user can actually pay with, auto-detected from their identity.
+  const methods = buildGenerationMethods({ tier, evmWalletAddress, tonWalletAddress, telegramUserId: auth?.telegramUserId });
+
+  // Paid path — Stars: consume a prepaid Telegram order.
   if (paymentMethod === "stars" || (starsOrderId && paymentMethod !== "ton" && paymentMethod !== "0g")) {
     if (!starsOrderId) {
-      throw generationAccessError({ ...paymentRequirement, existingGames, tier, starsAmount });
+      throw generationAccessError({ existingGames, tier, methods });
     }
     const payment = await consumeGenerationStarsOrder({ auth, orderId: starsOrderId, tier });
     return {
@@ -192,27 +213,32 @@ export async function assertGenerationAccess({
     };
   }
 
-  // On-chain path (TON or 0G).
+  // On-chain path. The verification currency is the method the client chose, or
+  // — when unspecified — the user's primary chain method (TON wallet → TON,
+  // EVM/0G wallet → 0G). This is the "auto currency by connection" behavior.
+  const chosen = paymentMethod === "0g" ? "0g" : paymentMethod === "ton" ? "ton" : methods.chain.method;
+  const chosenAmount = chosen === "0g" ? paidGenerationPrice0G(tier) : paidGenerationPriceTON(tier);
   if (!paymentTxHash) {
-    throw generationAccessError({ ...paymentRequirement, existingGames, tier, starsAmount });
+    throw generationAccessError({ existingGames, tier, methods });
   }
-  const payment = paymentRequirement.currency === "0G"
+  const payment = chosen === "0g"
     ? await verifyAndRecordGenerationPayment({
         txHash: paymentTxHash,
         creatorId: evmWalletAddress ?? creatorId,
-        amount0G: paymentRequirement.amount
+        amount0G: chosenAmount
       })
     : await verifyAndRecordTonGenerationPayment({
         reference: paymentTxHash,
         creatorId: tonWalletAddress ?? creatorId,
-        amountTon: paymentRequirement.amount
+        amountTon: chosenAmount
       });
   return {
     free: false,
-    currency: paymentRequirement.currency,
-    amount: paymentRequirement.amount,
+    currency: chosen === "0g" ? "0G" : "TON",
+    amount: chosenAmount,
     tier: paymentRequirement.tier,
     existingGames,
+    paymentMethod: chosen,
     paymentTxHash,
     payment
   };
@@ -235,57 +261,70 @@ export async function assertEditAccess({
   auth
 }) {
   const requirement = editingPaymentDetails(tier);
-  const starsAmount = editStarsPrice(tier);
 
   if (hasUnlimitedAccess({ creatorId, creatorAliases, evmWalletAddress, tonWalletAddress })) {
     return { free: true, editing: true, currency: requirement.currency, amount: 0, tier: requirement.tier, unlimited: true };
   }
 
-  // The chain (TON/0G) edit price is the gate. 0 = editing is FREE for that tier
-  // (the default), regardless of method. Set it > 0 to charge; Stars then becomes
-  // an alternative way to pay the same gate.
-  if (!requirement.amount || requirement.amount <= 0) {
-    return { free: true, editing: true, currency: requirement.currency, amount: 0, tier: requirement.tier };
+  // Edit methods available to THIS user (auto-detected from their identity).
+  const methods = buildEditMethods({ tier, evmWalletAddress, tonWalletAddress, telegramUserId: auth?.telegramUserId });
+
+  // The user's primary chain edit price is the gate. 0 = editing is FREE for
+  // that tier (the default). Set it > 0 to charge; Stars is then an alternative.
+  if (!methods.chain.amount || methods.chain.amount <= 0) {
+    return { free: true, editing: true, currency: methods.chain.currency, amount: 0, tier: requirement.tier };
   }
 
   // Paid edit — Stars path consumes a prepaid edit order.
   if (paymentMethod === "stars" || (starsOrderId && paymentMethod !== "ton" && paymentMethod !== "0g")) {
     if (!starsOrderId) {
-      throw editAccessError({ requirement, starsAmount });
+      throw editAccessError({ tier, methods });
     }
     const payment = await consumeEditStarsOrder({ auth, orderId: starsOrderId, tier });
     return { free: false, editing: true, currency: "XTR", amount: payment.starsAmount, tier: requirement.tier, paymentMethod: "stars", starsOrderId, payment };
   }
 
+  const chosen = paymentMethod === "0g" ? "0g" : paymentMethod === "ton" ? "ton" : methods.chain.method;
+  const chosenAmount = chosen === "0g" ? editingPrice0G(tier) : editingPriceTON(tier);
   if (!paymentTxHash) {
-    throw editAccessError({ requirement, starsAmount });
+    throw editAccessError({ tier, methods });
   }
+  const payment = chosen === "0g"
+    ? await verifyAndRecordGenerationPayment({ txHash: paymentTxHash, creatorId: evmWalletAddress ?? creatorId, amount0G: chosenAmount })
+    : await verifyAndRecordTonGenerationPayment({ reference: paymentTxHash, creatorId: tonWalletAddress ?? creatorId, amountTon: chosenAmount });
 
-  const payment = requirement.currency === "0G"
-    ? await verifyAndRecordGenerationPayment({ txHash: paymentTxHash, creatorId: evmWalletAddress ?? creatorId, amount0G: requirement.amount })
-    : await verifyAndRecordTonGenerationPayment({ reference: paymentTxHash, creatorId: tonWalletAddress ?? creatorId, amountTon: requirement.amount });
-
-  return { free: false, editing: true, currency: requirement.currency, amount: requirement.amount, tier: requirement.tier, paymentTxHash, payment };
+  return { free: false, editing: true, currency: chosen === "0g" ? "0G" : "TON", amount: chosenAmount, tier: requirement.tier, paymentMethod: chosen, paymentTxHash, payment };
 }
 
-// 402 for a paid edit, advertising both TON/0G and Stars options.
-function editAccessError({ requirement, starsAmount }) {
-  const parts = [];
-  if (requirement.amount > 0) parts.push(`${requirement.amount} ${requirement.currency}`);
-  if (starsAmount > 0) parts.push(`${starsAmount} Stars`);
-  const error = new Error(`This edit costs ${parts.join(" or ")}.`);
+// Edit methods available to a user (parallels buildGenerationMethods).
+function buildEditMethods({ tier, evmWalletAddress, tonWalletAddress, telegramUserId }) {
+  const ton = tonWalletAddress ? { method: "ton", currency: "TON", amount: editingPriceTON(tier) } : null;
+  const zerog = evmWalletAddress ? { method: "0g", currency: "0G", amount: editingPrice0G(tier) } : null;
+  const starsAmt = editStarsPrice(tier);
+  const stars = (telegramUserId && starsPaymentAvailable() && starsAmt > 0)
+    ? { method: "stars", currency: "XTR", amount: starsAmt, available: true }
+    : null;
+  let chain = ton ?? zerog;
+  if (!chain) {
+    const d = editingPaymentDetails(tier);
+    chain = { method: d.currency === "0G" ? "0g" : "ton", currency: d.currency, amount: d.amount };
+  }
+  return { chain, ton, "0g": zerog, stars };
+}
+
+// 402 for a paid edit, advertising exactly the methods this user can pay with.
+function editAccessError({ tier, methods }) {
+  const options = [methods.ton, methods["0g"], methods.stars].filter(Boolean).filter((m) => m.amount > 0).map((m) => `${m.amount} ${m.currency}`);
+  const error = new Error(`This edit costs ${options.join(" or ")}.`);
   error.status = 402;
   error.code = "PAID_EDIT_REQUIRED";
   error.payment = {
     required: true,
     editing: true,
-    currency: requirement.currency,
-    amount: requirement.amount,
-    tier: requirement.tier,
-    methods: {
-      chain: requirement.amount > 0 ? { method: requirement.currency === "0G" ? "0g" : "ton", currency: requirement.currency, amount: requirement.amount } : null,
-      stars: starsAmount > 0 ? { method: "stars", currency: "XTR", amount: starsAmount, available: starsPaymentAvailable() } : null
-    }
+    currency: methods.chain.currency,
+    amount: methods.chain.amount,
+    tier: normalizeTier(tier),
+    methods
   };
   return error;
 }
