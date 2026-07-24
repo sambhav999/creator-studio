@@ -17,6 +17,7 @@ import { getDatabaseConfig } from "./services/databaseService.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 import { getZeroGConfig } from "./services/zeroGService.js";
 import { getZeroGStorageConfig } from "./services/zeroGStorage.js";
+import { getZeroGActivityContractConfig } from "./services/zeroGActivityContractService.js";
 import { requestIp, trackReferralClick } from "./services/referralService.js";
 
 dotenv.config();
@@ -53,7 +54,8 @@ app.get("/", (_request, response) => {
     },
     database: getDatabaseConfig(),
     agents: getZeroGConfig(),
-    storage: getZeroGStorageConfig()
+    storage: getZeroGStorageConfig(),
+    onchainActivity: getZeroGActivityContractConfig()
   });
 });
 
@@ -84,7 +86,8 @@ const setupRoutes = (prefix) => {
       strategy: "template-first-ai-optional",
       database: getDatabaseConfig(),
       agents: getZeroGConfig(),
-      storage: getZeroGStorageConfig()
+      storage: getZeroGStorageConfig(),
+      onchainActivity: getZeroGActivityContractConfig()
     });
   });
 

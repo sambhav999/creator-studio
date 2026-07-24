@@ -1,9 +1,12 @@
 import { getDatabase } from "./databaseService.js";
 import { putJsonOnZeroG } from "./zeroGStorage.js";
+import { recordOnchainActivityQuietly } from "./zeroGActivityContractService.js";
 
 const collectionName = "user_activities";
 const memoryActivities = [];
 const AUDIT_ACTIVITY_TYPES = new Set([
+  "create",
+  "edit",
   "publish",
   "unpublish",
   "major_edit",
@@ -57,9 +60,26 @@ export async function logActivity({ userId, gameId, gameTitle, activityType, det
         gameId: gameId || null,
         activityType
       }
-    }).catch((error) => {
-      console.warn("0G audit event upload failed", { activityType, message: error.message });
-    });
+    })
+      .then((storage) => {
+        recordOnchainActivityQuietly({
+          activityType,
+          entityId: String(activity._id ?? `${activityType}:${userId}:${activity.timestamp.getTime()}`),
+          metadata: {
+            userId: activity.userId,
+            gameId: activity.gameId,
+            gameTitle: activity.gameTitle,
+            activityType: activity.activityType,
+            details: activity.details,
+            timestamp: activity.timestamp
+          },
+          metadataURI: storage?.uri,
+          storage
+        });
+      })
+      .catch((error) => {
+        console.warn("0G audit event upload failed", { activityType, message: error.message });
+      });
   }
 }
 

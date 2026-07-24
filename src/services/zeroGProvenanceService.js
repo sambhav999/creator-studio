@@ -1,4 +1,5 @@
 import { putJsonOnZeroG } from "./zeroGStorage.js";
+import { recordOnchainActivityQuietly } from "./zeroGActivityContractService.js";
 
 // Immutable provenance records on 0G Storage. Every helper is FIRE-AND-FORGET:
 // provenance must never block, slow, or break the main flow, so failures are
@@ -6,9 +7,20 @@ import { putJsonOnZeroG } from "./zeroGStorage.js";
 // the zero_g_storage_objects collection like every other stored object.
 function record(objectType, objectId, data, metadata = {}) {
   if (!objectId) return;
-  void putJsonOnZeroG({ objectType, objectId: String(objectId), data, metadata }).catch((error) => {
-    console.warn(`0G provenance store failed (${objectType})`, { message: error.message });
-  });
+  void putJsonOnZeroG({ objectType, objectId: String(objectId), data, metadata })
+    .then((storage) => {
+      recordOnchainActivityQuietly({
+        activityType: objectType,
+        entityId: String(objectId),
+        actorAddress: metadata.actorAddress,
+        metadata: data,
+        metadataURI: storage?.uri,
+        storage
+      });
+    })
+    .catch((error) => {
+      console.warn(`0G provenance store failed (${objectType})`, { message: error.message });
+    });
 }
 
 function nowIso() {
@@ -32,7 +44,7 @@ export function recordPaymentReceipt({ creatorId, gameId, tier, access }) {
     paymentTxHash: access.paymentTxHash ?? null,
     starsOrderId: access.starsOrderId ?? null,
     recordedAt: nowIso()
-  }, { creatorId: creatorId ?? null, gameId: gameId ?? null });
+  }, { creatorId: creatorId ?? null, gameId: gameId ?? null, actorAddress: access.payment?.payer ?? null });
 }
 
 // 2) Game version history — every build/edit that produced code.

@@ -113,6 +113,15 @@ ZERO_G_STORAGE_PRIVATE_KEY=
 ZERO_G_STORAGE_EXPECTED_REPLICA=1
 ZERO_G_STORAGE_COLLECTION=zero_g_storage_objects
 
+# 0G on-chain activity registry
+ZERO_G_ACTIVITY_ENABLED=true
+ZERO_G_ACTIVITY_RPC_URL=https://evmrpc.0g.ai
+ZERO_G_ACTIVITY_CHAIN_ID=16661
+ZERO_G_ACTIVITY_PRIVATE_KEY=
+ZERO_G_ACTIVITY_CONTRACT_ADDRESS=
+ZERO_G_ACTIVITY_CONFIRMATIONS=1
+ZERO_G_ACTIVITY_COLLECTION=zero_g_onchain_activities
+
 # Database (optional — persistence)
 MONGODB_URI=mongodb://localhost:27017/prompt_creator_studio
 MONGODB_COLLECTION=prompt_creator_studio
@@ -134,6 +143,8 @@ JWT_SECRET=change-this-local-secret
 `CORS_ORIGIN` can be a comma-separated list of allowed origins. `MONGODB_URI` can point at a local MongoDB database or an Atlas database. Generated game packages are saved to the collection configured by `MONGODB_COLLECTION`.
 
 0G Storage uploads are handled by `src/services/zeroGStorage.js` using the official `@0gfoundation/0g-storage-ts-sdk` flow from the 0G Storage SDK docs: `MemData` → `merkleTree()` → `Indexer.upload(file, evmRpc, signer)`. Game packages, thumbnails, leaderboard score records, and leaderboard snapshots are uploaded when `ZERO_G_STORAGE_INDEXER_RPC`, `ZERO_G_STORAGE_EVM_RPC`, and `ZERO_G_STORAGE_PRIVATE_KEY` are configured. MongoDB stores the searchable index in `ZERO_G_STORAGE_COLLECTION`, including `objectType`, `objectId`, `contentHash`, `rootHash`, `txHash`, `uri`, and upload `status`.
+
+0G on-chain activity recording is handled by `src/services/zeroGActivityContractService.js` and the Solidity contract in `creator-studio-contracts/contracts/CreatorActivityRegistry.sol`. The backend signer calls `recordActivity` after storage-backed provenance events, leaderboard records, and audit activities. The contract stores compact proof fields: actor, activity type hash, entity id, metadata URI, metadata hash, and timestamp. Full JSON remains in 0G Storage and MongoDB. Configure `ZERO_G_ACTIVITY_PRIVATE_KEY` and `ZERO_G_ACTIVITY_CONTRACT_ADDRESS` after deployment; `CONTRACT_DEPLOYER_ADDRESS` is accepted only as a legacy private-key fallback.
 
 ---
 

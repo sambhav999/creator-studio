@@ -1,5 +1,6 @@
 import { getDatabase } from "./databaseService.js";
 import { putJsonOnZeroG } from "./zeroGStorage.js";
+import { recordOnchainActivityQuietly } from "./zeroGActivityContractService.js";
 
 const collectionName = "game_leaderboard_scores";
 const memoryScores = new Map();
@@ -79,6 +80,13 @@ export async function submitScore({ gameId, userId, username, score }) {
       data: { ...entry, submittedAt: now },
       metadata: { gameId, userId }
     });
+    recordOnchainActivityQuietly({
+      activityType: "score-submitted",
+      entityId: `${gameId}:${userId}`,
+      metadata: { ...entry, submittedAt: now },
+      metadataURI: scoreStorage?.uri,
+      storage: scoreStorage
+    });
     await collection.updateOne(
       { gameId, userId },
       {
@@ -94,6 +102,13 @@ export async function submitScore({ gameId, userId, username, score }) {
       objectId: gameId,
       data: leaderboard,
       metadata: { gameId, limit: leaderboard.entries.length }
+    });
+    recordOnchainActivityQuietly({
+      activityType: "leaderboard-snapshot",
+      entityId: gameId,
+      metadata: leaderboard,
+      metadataURI: snapshotStorage?.uri,
+      storage: snapshotStorage
     });
     return { ...leaderboard, zeroGStorage: snapshotStorage };
   }

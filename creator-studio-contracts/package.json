@@ -1,0 +1,20 @@
+{
+  "name": "@kult/creator-studio-contracts",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "deploy:0g": "hardhat run scripts/deploy.js --network zeroGMainnet",
+    "deploy:0g:testnet": "hardhat run scripts/deploy.js --network zeroGTestnet",
+    "verify:0g": "hardhat run scripts/verify.js --network zeroGMainnet",
+    "verify:0g:testnet": "hardhat run scripts/verify.js --network zeroGTestnet"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-ethers": "^3.0.8",
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "@nomicfoundation/hardhat-verify": "^2.1.0",
+    "dotenv": "^16.4.7",
+    "hardhat": "^2.22.18"
+  }
+}
