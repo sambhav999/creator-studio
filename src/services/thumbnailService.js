@@ -2,6 +2,7 @@ import { getDatabase, getGameCollection } from "./databaseService.js";
 import { isSpacesConfigured, uploadPublicObject } from "./spacesStorageService.js";
 import { generateImageAsset } from "./zeroGService.js";
 import { putBufferOnZeroG } from "./zeroGStorage.js";
+import { logActivityOnChain, ACTIVITY } from "./zeroGActivityLog.js";
 
 const COLLECTION_NAME = "thumbnails";
 
@@ -20,6 +21,8 @@ export async function uploadThumbnail(templateId, buffer, contentType, fileName)
     fileName,
     metadata: { templateId }
   });
+  // 0G on-chain: an asset-stored event.
+  logActivityOnChain(ACTIVITY.ASSET_STORED, templateId);
 
   // Primary store is DigitalOcean Spaces — Mongo keeps only the public URL.
   if (isSpacesConfigured()) {

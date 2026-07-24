@@ -8,6 +8,7 @@ import { getJob, serializeJob, startJob } from "../services/jobService.js";
 import { createRefinementBundle } from "../services/refinementService.js";
 import { assertGenerationAccess, assertEditAccess, generationAccessMetadata } from "../services/generationAccessService.js";
 import { recordPaymentReceipt, recordGameVersion, recordReferenceInput, recordVoiceInput } from "../services/zeroGProvenanceService.js";
+import { logActivityOnChain, ACTIVITY } from "../services/zeroGActivityLog.js";
 import { authIdentityAliases, authOwnsIdentity } from "../services/identityAliasService.js";
 import {
   analyzeReferenceImage,
@@ -146,7 +147,10 @@ export async function generateCode(request, response, next) {
         tier: isEdit ? (normalizeTier(input.tier ?? input.gamePackage?.generation?.qualityTier) ?? 1) : normalizeTier(input.tier),
         access: generationAccess
       });
+      logActivityOnChain(ACTIVITY.PAYMENT, input.gamePackage?.id ?? "generation");
     }
+    // 0G on-chain: an edit action (fresh builds are logged as GAME_GENERATED in gameController).
+    if (isEdit) logActivityOnChain(ACTIVITY.GAME_EDITED, input.gamePackage?.id ?? "");
     const job = startJob("code-generation", async (updateProgress) => {
       const refinement = await createRefinementBundle(
         { ...input, strategy, models },

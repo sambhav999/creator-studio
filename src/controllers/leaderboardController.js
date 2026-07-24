@@ -2,6 +2,7 @@ import { z } from "zod";
 import { getLeaderboard, submitScore } from "../services/leaderboardService.js";
 import { getCreatorScoreLeaderboard, getKultPointsLeaderboard } from "../services/pointsService.js";
 import { logActivity, getGameTitle } from "../services/activityService.js";
+import { logActivityOnChain, ACTIVITY } from "../services/zeroGActivityLog.js";
 
 const gameParamsSchema = z.object({
   gameId: z.string().min(1),
@@ -58,6 +59,8 @@ export async function handleSubmitScore(request, response, next) {
     const { gameId } = gameParamsSchema.parse(request.params);
     const input = scoreSchema.parse(request.body);
     const leaderboard = await submitScore({ gameId, ...input });
+    // 0G on-chain: a score submission event.
+    logActivityOnChain(ACTIVITY.SCORE_SUBMITTED, gameId);
 
     // Log play activity
     const gameTitle = await getGameTitle(gameId);

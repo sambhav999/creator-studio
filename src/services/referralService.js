@@ -4,6 +4,7 @@ import { getDatabase } from "./databaseService.js";
 import { logActivity } from "./activityService.js";
 import { POINT_VALUES, awardReferralPlay } from "./pointsService.js";
 import { recordReferralAttribution } from "./zeroGProvenanceService.js";
+import { logActivityOnChain, ACTIVITY } from "./zeroGActivityLog.js";
 
 const VELOCITY_LIMIT = 10;
 const VELOCITY_WINDOW_MS = 60 * 60 * 1000;
@@ -99,8 +100,9 @@ export async function attributeNewUser({ userId, code, ip }) {
   };
   try {
     const result = await attributions.insertOne(attribution);
-    // 0G: immutable referral attribution record.
+    // 0G: immutable referral attribution record + on-chain event.
     recordReferralAttribution({ userId, referrerId: referrer.userId, referredId: userId, code, status: attribution.status });
+    logActivityOnChain(ACTIVITY.REFERRAL, userId);
     return { ...attribution, _id: result.insertedId };
   } catch (error) {
     if (error.code === 11000) return null;

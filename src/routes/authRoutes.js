@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { getAuthConfig, signToken, verifyPrivySession } from "../services/authService.js";
 import { attributeNewUser, requestIp } from "../services/referralService.js";
+import { logActivityOnChain, ACTIVITY } from "../services/zeroGActivityLog.js";
 
 const tokenSchema = z.object({
   userId: z.string().min(1).max(256).optional(),
@@ -32,6 +33,8 @@ authRouter.post("/token", async (request, response, next) => {
       identityToken: input.privyIdentityToken
     });
     const userId = privySession?.userId ?? input.userId ?? `anon_${Date.now().toString(36)}`;
+    // 0G on-chain: log a login/session-start event.
+    logActivityOnChain(ACTIVITY.LOGIN, userId);
     await attributeNewUser({
       userId,
       code: referralCookie(request),

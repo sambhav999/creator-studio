@@ -18,6 +18,7 @@ import { awardFirstGameBonus, recordCreatorGamePublished } from "../services/poi
 import { notifyFollowersOfPublish } from "../services/socialService.js";
 import { assertGenerationAccess, generationAccessMetadata } from "../services/generationAccessService.js";
 import { recordPaymentReceipt, recordGenerationProvenance, recordPublishedSnapshot } from "../services/zeroGProvenanceService.js";
+import { logActivityOnChain, ACTIVITY } from "../services/zeroGActivityLog.js";
 import {
   authIdentityAliases,
   authOwnsIdentity,
@@ -193,6 +194,7 @@ export async function publishGame(request, response, next) {
     await updateGamePackageFields(game.id, { publish });
     // 0G: pin an immutable snapshot of the exact build being published.
     recordPublishedSnapshot({ game: { ...game, publish } });
+    logActivityOnChain(ACTIVITY.GAME_PUBLISHED, game.id);
     await logActivity({
       userId: request.auth?.userId,
       gameId: game.id,
@@ -428,6 +430,9 @@ export async function generateGame(request, response, next) {
     // 0G provenance: how the game was made + a receipt if it was paid.
     recordGenerationProvenance({ game: result.game });
     recordPaymentReceipt({ creatorId, gameId: result.game.id, tier, access: generationAccess });
+    // 0G on-chain activity events.
+    logActivityOnChain(ACTIVITY.GAME_GENERATED, result.game.id);
+    if (generationAccess && !generationAccess.free) logActivityOnChain(ACTIVITY.PAYMENT, result.game.id);
     result.game.publish = {
       ...(result.game.publish ?? {}),
       published: false,

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { getDatabase, getDatabaseByName, getGameCollection } from "./databaseService.js";
 import { recordPointsLedgerEvent } from "./zeroGProvenanceService.js";
+import { logActivityOnChain } from "./zeroGActivityLog.js";
 
 export const POINT_VALUES = Object.freeze({
   playerPlay: 10,
@@ -196,8 +197,14 @@ async function insertLedgerEvent(collection, event) {
     { upsert: true },
   );
   const inserted = Boolean(insertResult.upsertedCount);
-  // 0G: mirror each NEW points event to an immutable ledger record.
-  if (inserted) recordPointsLedgerEvent(event);
+  // 0G: mirror each NEW points event to an immutable ledger record + an on-chain
+  // activity event. The event's own type (e.g. "like", "share", "playerPlay") is
+  // used as the on-chain action name, so likes/shares/follows/plays/completions
+  // all appear as distinct on-chain events from this one hook.
+  if (inserted) {
+    recordPointsLedgerEvent(event);
+    logActivityOnChain(event.type || "points_awarded", event.eventId);
+  }
   return inserted;
 }
 
