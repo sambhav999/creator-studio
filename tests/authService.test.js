@@ -117,6 +117,21 @@ test("Privy verification keys support escaped deployment line breaks", () => {
   }
 });
 
+test("Privy verification keys support a base64 SPKI body from the dashboard", () => {
+  const originalKey = process.env.PRIVY_VERIFICATION_KEY;
+  process.env.PRIVY_VERIFICATION_KEY = '"YWJjZA=="';
+
+  try {
+    assert.equal(
+      getPrivyAuthConfig().verificationKey,
+      "-----BEGIN PUBLIC KEY-----\nYWJjZA==\n-----END PUBLIC KEY-----"
+    );
+  } finally {
+    if (originalKey === undefined) delete process.env.PRIVY_VERIFICATION_KEY;
+    else process.env.PRIVY_VERIFICATION_KEY = originalKey;
+  }
+});
+
 test("verifyPrivySession rejects missing Privy server configuration", async () => {
   const originalNodeEnv = process.env.NODE_ENV;
   const originalAppId = process.env.PRIVY_APP_ID;

@@ -28,10 +28,29 @@ export function getAuthConfig() {
   };
 }
 
+function normalizePrivyVerificationKey(value) {
+  let key = String(value ?? "").trim().replace(/\\n/g, "\n");
+  if (
+    (key.startsWith('"') && key.endsWith('"')) ||
+    (key.startsWith("'") && key.endsWith("'"))
+  ) {
+    key = key.slice(1, -1).trim();
+  }
+  if (!key || key.startsWith("-----BEGIN PUBLIC KEY-----")) return key;
+
+  // Privy's dashboard may expose/store only the base64 SPKI body. The SDK
+  // expects a complete PEM string, so restore the standard wrapper.
+  const compact = key.replace(/\s+/g, "");
+  if (/^[A-Za-z0-9+/]+={0,2}$/.test(compact)) {
+    const lines = compact.match(/.{1,64}/g) ?? [];
+    return `-----BEGIN PUBLIC KEY-----\n${lines.join("\n")}\n-----END PUBLIC KEY-----`;
+  }
+
+  return key;
+}
+
 export function getPrivyAuthConfig() {
-  const verificationKey = String(process.env.PRIVY_VERIFICATION_KEY ?? "")
-    .trim()
-    .replace(/\\n/g, "\n");
+  const verificationKey = normalizePrivyVerificationKey(process.env.PRIVY_VERIFICATION_KEY);
 
   return {
     appId: process.env.PRIVY_APP_ID,
@@ -129,6 +148,10 @@ export async function verifyPrivySession({ accessToken, identityToken }) {
         })
       : null;
   } catch (cause) {
+    console.warn("[auth] Privy credential verification failed", {
+      name: cause?.name,
+      message: cause?.message
+    });
     const error = new Error("Invalid Privy credentials", { cause });
     error.status = 401;
     throw error;
