@@ -80,15 +80,23 @@ async function downloadImage(url) {
  * other image, and points the saved game record at the served URL.
  * Runs as a background job — never blocks game generation.
  */
+// A short, uppercase cover title (max 3 words) — image models render short
+// text far more legibly than long strings, so we trim the game title down.
+export function coverTitle(title) {
+  const cleaned = String(title || "").replace(/[^a-zA-Z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+  return (cleaned.split(" ").slice(0, 3).join(" ") || "GAME").toUpperCase();
+}
+
 export async function generateAndStoreGameThumbnail(game) {
   if (!game?.id) throw new Error("game.id is required for thumbnail generation");
 
   const prompt = [
-    `${game.title} game thumbnail`,
+    `${game.title} game cover art`,
     game.gameplay?.mechanic,
     game.visuals?.mood,
     (game.visuals?.colors ?? []).slice(0, 3).join(" "),
-    "polished colorful game cover art, clear gameplay subject, no text"
+    `the bold uppercase title "${coverTitle(game.title)}" spelled exactly, in a clean large display font across the top like a game cover`,
+    "polished colorful game cover art, clear gameplay subject, crisp legible lettering"
   ].filter(Boolean).join(", ");
 
   // Covers don't need full resolution — 512px keeps DB documents ~4x smaller.

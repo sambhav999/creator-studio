@@ -463,15 +463,17 @@ export async function generateGameFromPrompt({
         models
       })
     : null;
+  const coverTitle = (String(game.title || "").replace(/[^a-zA-Z0-9\s]/g, " ").replace(/\s+/g, " ").trim().split(" ").slice(0, 3).join(" ") || "GAME").toUpperCase();
   const assetsPromise = includeAssets
     ? generateImageAsset({
         prompt: [
-          `${game.title} game thumbnail`,
+          `${game.title} game cover art`,
           game.gameplay?.mechanic,
           game.visuals?.mood,
           game.generation?.variation?.thumbnailConcept,
+          `the bold uppercase title "${coverTitle}" spelled exactly, in a clean large display font across the top like a game cover`,
           `unique generation fingerprint ${generationId}`,
-          "polished colorful game cover art, clear gameplay subject, no text, do not reuse a previous composition"
+          "polished colorful game cover art, clear gameplay subject, crisp legible lettering, do not reuse a previous composition"
         ].filter(Boolean).join(", "),
         models
       })
