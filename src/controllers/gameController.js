@@ -70,7 +70,9 @@ const exportCodeSchema = z.object({
 export async function listGames(request, response, next) {
   try {
     const limit = Math.min(Number(request.query.limit) || 50, 100);
+    const offset = Math.max(Number(request.query.offset) || 0, 0);
     const search = request.query.search || request.query.q;
+    const category = request.query.category;
     const creatorId = request.query.creatorId;
     if (creatorId && !authOwnsIdentity(request.auth, creatorId)) {
       response.status(403).json({ error: "You can only list your own draft games" });
@@ -82,6 +84,8 @@ export async function listGames(request, response, next) {
     const games = await listGamePackages({
       limit,
       search,
+      category,
+      offset,
       creatorId: creatorId ? creatorFilterForAuth(request.auth, creatorId) : undefined,
       ids,
       publishedOnly: !creatorId

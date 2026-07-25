@@ -128,7 +128,15 @@ export async function getGamePackageById(id) {
   return collection.findOne({ id }, { projection: { _id: 0 } });
 }
 
-export async function listGamePackages({ limit = 50, search, creatorId, ids, publishedOnly = false } = {}) {
+export async function listGamePackages({
+  limit = 50,
+  offset = 0,
+  search,
+  category,
+  creatorId,
+  ids,
+  publishedOnly = false
+} = {}) {
   const collection = await getGameCollection();
   // Template auto-saves (every studio selection persists one) are not user
   // creations — only prompt-generated games belong in the creations list.
@@ -152,6 +160,10 @@ export async function listGamePackages({ limit = 50, search, creatorId, ids, pub
   if (Array.isArray(creatorId) && creatorId.length > 0) filter.creatorId = { $in: creatorId };
   else if (creatorId) filter.creatorId = creatorId;
   if (Array.isArray(ids) && ids.length > 0) filter.id = { $in: ids };
+  if (category) {
+    const escapedCategory = String(category).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    filter.category = { $regex: `^${escapedCategory}$`, $options: "i" };
+  }
   if (search) {
     filter.$or = [
       { id: search },
@@ -162,7 +174,8 @@ export async function listGamePackages({ limit = 50, search, creatorId, ids, pub
   const games = await collection
     .find(filter, { projection: { _id: 0 } })
     .sort({ updatedAt: -1 })
-    .limit(publishedOnly ? Math.min(limit * 3, 300) : limit)
+    .skip(publishedOnly ? 0 : offset)
+    .limit(publishedOnly ? Math.min((offset + limit) * 3, 300) : limit)
     .toArray();
   if (!publishedOnly) return games;
   const now = Date.now();
@@ -173,7 +186,7 @@ export async function listGamePackages({ limit = 50, search, creatorId, ids, pub
       if (aBoosted !== bBoosted) return aBoosted ? -1 : 1;
       return (Date.parse(b.updatedAt ?? "") || 0) - (Date.parse(a.updatedAt ?? "") || 0);
     })
-    .slice(0, limit);
+    .slice(offset, offset + limit);
 }
 
 export async function countCreatedGamePackagesByCreator(creatorId) {
