@@ -29,10 +29,14 @@ export function getAuthConfig() {
 }
 
 export function getPrivyAuthConfig() {
+  const verificationKey = String(process.env.PRIVY_VERIFICATION_KEY ?? "")
+    .trim()
+    .replace(/\\n/g, "\n");
+
   return {
     appId: process.env.PRIVY_APP_ID,
-    verificationKey: process.env.PRIVY_VERIFICATION_KEY,
-    configured: Boolean(process.env.PRIVY_APP_ID && process.env.PRIVY_VERIFICATION_KEY)
+    verificationKey,
+    configured: Boolean(process.env.PRIVY_APP_ID && verificationKey)
   };
 }
 

@@ -1,6 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { derivePrivyUserId, extractPrivyIdentity, verifyPrivySession } from "../src/services/authService.js";
+import {
+  derivePrivyUserId,
+  extractPrivyIdentity,
+  getPrivyAuthConfig,
+  verifyPrivySession
+} from "../src/services/authService.js";
 
 test("derivePrivyUserId uses Privy id as the canonical cross-app identity", () => {
   const userId = derivePrivyUserId({
@@ -94,6 +99,22 @@ test("verifyPrivySession rejects requests without Privy credentials", async () =
     () => verifyPrivySession({}),
     (error) => error.status === 401 && error.message === "Privy authentication required"
   );
+});
+
+test("Privy verification keys support escaped deployment line breaks", () => {
+  const originalKey = process.env.PRIVY_VERIFICATION_KEY;
+  process.env.PRIVY_VERIFICATION_KEY =
+    "-----BEGIN PUBLIC KEY-----\\npublic-key-data\\n-----END PUBLIC KEY-----";
+
+  try {
+    assert.equal(
+      getPrivyAuthConfig().verificationKey,
+      "-----BEGIN PUBLIC KEY-----\npublic-key-data\n-----END PUBLIC KEY-----"
+    );
+  } finally {
+    if (originalKey === undefined) delete process.env.PRIVY_VERIFICATION_KEY;
+    else process.env.PRIVY_VERIFICATION_KEY = originalKey;
+  }
 });
 
 test("verifyPrivySession rejects missing Privy server configuration", async () => {
