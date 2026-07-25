@@ -93,33 +93,42 @@ function hasPrivyToken(accessToken, identityToken) {
 }
 
 export async function verifyPrivySession({ accessToken, identityToken }) {
-  if (!hasPrivyToken(accessToken, identityToken)) return null;
+  if (!hasPrivyToken(accessToken, identityToken)) {
+    const error = new Error("Privy authentication required");
+    error.status = 401;
+    throw error;
+  }
 
   const config = getPrivyAuthConfig();
   if (!config.configured) {
-    if (process.env.NODE_ENV === "production") {
-      const error = new Error("Privy auth is not configured");
-      error.status = 500;
-      throw error;
-    }
-    return null;
+    const error = new Error("Privy auth is not configured");
+    error.status = 500;
+    throw error;
   }
 
-  const verifiedAccess = accessToken
-    ? await verifyAccessToken({
-        access_token: accessToken,
-        app_id: config.appId,
-        verification_key: config.verificationKey
-      })
-    : null;
+  let verifiedAccess = null;
+  let verifiedUser = null;
+  try {
+    verifiedAccess = accessToken
+      ? await verifyAccessToken({
+          access_token: accessToken,
+          app_id: config.appId,
+          verification_key: config.verificationKey
+        })
+      : null;
 
-  const verifiedUser = identityToken
-    ? await verifyIdentityToken({
-        identity_token: identityToken,
-        app_id: config.appId,
-        verification_key: config.verificationKey
-      })
-    : null;
+    verifiedUser = identityToken
+      ? await verifyIdentityToken({
+          identity_token: identityToken,
+          app_id: config.appId,
+          verification_key: config.verificationKey
+        })
+      : null;
+  } catch (cause) {
+    const error = new Error("Invalid Privy credentials", { cause });
+    error.status = 401;
+    throw error;
+  }
 
   if (!verifiedAccess && !verifiedUser) {
     const error = new Error("Privy token required");

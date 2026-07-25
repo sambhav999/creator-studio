@@ -5,7 +5,6 @@ import { attributeNewUser, requestIp } from "../services/referralService.js";
 import { logActivityOnChain, ACTIVITY } from "../services/zeroGActivityLog.js";
 
 const tokenSchema = z.object({
-  userId: z.string().min(1).max(256).optional(),
   privyAccessToken: z.string().min(1).optional().nullable(),
   privyIdentityToken: z.string().min(1).optional().nullable()
 });
@@ -16,9 +15,7 @@ authRouter.get("/config", (_request, response) => {
   response.json(getAuthConfig());
 });
 
-// Issues a JWT for the given (or generated anonymous) user id. There is no
-// user database yet, so this is identity plumbing rather than authentication —
-// it lets every write endpoint require a signed token end to end.
+// Issues an application JWT only after Privy has verified the caller.
 function referralCookie(request) {
   const raw = request.headers.cookie || "";
   const match = raw.split(";").map((part) => part.trim()).find((part) => part.startsWith("kult_ref="));
@@ -32,7 +29,7 @@ authRouter.post("/token", async (request, response, next) => {
       accessToken: input.privyAccessToken,
       identityToken: input.privyIdentityToken
     });
-    const userId = privySession?.userId ?? input.userId ?? `anon_${Date.now().toString(36)}`;
+    const userId = privySession.userId;
     // 0G on-chain: log a login/session-start event.
     logActivityOnChain(ACTIVITY.LOGIN, userId);
     await attributeNewUser({
@@ -45,22 +42,22 @@ authRouter.post("/token", async (request, response, next) => {
     });
     const token = signToken({
       userId,
-      privyUserId: privySession?.privyUserId,
-      privySessionId: privySession?.privySessionId,
-      evmWalletAddress: privySession?.evmWalletAddress,
-      tonWalletAddress: privySession?.tonWalletAddress,
-      telegramUserId: privySession?.telegramUserId,
-      identityAliases: privySession?.identityAliases ?? (userId ? [userId] : [])
+      privyUserId: privySession.privyUserId,
+      privySessionId: privySession.privySessionId,
+      evmWalletAddress: privySession.evmWalletAddress,
+      tonWalletAddress: privySession.tonWalletAddress,
+      telegramUserId: privySession.telegramUserId,
+      identityAliases: privySession.identityAliases
     });
     response.clearCookie("kult_ref", { path: "/" });
     response.json({
       token,
       userId,
-      privyUserId: privySession?.privyUserId,
-      evmWalletAddress: privySession?.evmWalletAddress,
-      tonWalletAddress: privySession?.tonWalletAddress,
-      telegramUserId: privySession?.telegramUserId,
-      identityAliases: privySession?.identityAliases ?? (userId ? [userId] : []),
+      privyUserId: privySession.privyUserId,
+      evmWalletAddress: privySession.evmWalletAddress,
+      tonWalletAddress: privySession.tonWalletAddress,
+      telegramUserId: privySession.telegramUserId,
+      identityAliases: privySession.identityAliases,
       expirationDays: getAuthConfig().expirationDays
     });
   } catch (error) {

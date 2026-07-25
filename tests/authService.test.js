@@ -89,12 +89,14 @@ test("derivePrivyUserId falls back to wallet, Telegram, and access token ids", (
   assert.equal(derivePrivyUserId(null, "did:from-access-token"), "did:from-access-token");
 });
 
-test("verifyPrivySession is additive for non-Privy clients", async () => {
-  const session = await verifyPrivySession({});
-  assert.equal(session, null);
+test("verifyPrivySession rejects requests without Privy credentials", async () => {
+  await assert.rejects(
+    () => verifyPrivySession({}),
+    (error) => error.status === 401 && error.message === "Privy authentication required"
+  );
 });
 
-test("verifyPrivySession allows local fallback when Privy env is missing", async () => {
+test("verifyPrivySession rejects missing Privy server configuration", async () => {
   const originalNodeEnv = process.env.NODE_ENV;
   const originalAppId = process.env.PRIVY_APP_ID;
   const originalVerificationKey = process.env.PRIVY_VERIFICATION_KEY;
@@ -104,8 +106,10 @@ test("verifyPrivySession allows local fallback when Privy env is missing", async
   process.env.NODE_ENV = "development";
 
   try {
-    const session = await verifyPrivySession({ accessToken: "dev-token" });
-    assert.equal(session, null);
+    await assert.rejects(
+      () => verifyPrivySession({ accessToken: "dev-token" }),
+      (error) => error.status === 500 && error.message === "Privy auth is not configured"
+    );
   } finally {
     process.env.NODE_ENV = originalNodeEnv;
     if (originalAppId === undefined) delete process.env.PRIVY_APP_ID;
