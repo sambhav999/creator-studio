@@ -5,6 +5,7 @@ import {
   getGamePackageById,
   listGamePackages,
   saveGamePackage,
+  upsertBuildingGamePackage,
   updateGamePackageFields
 } from "../services/databaseService.js";
 import { createGamePackage } from "../services/gameFactoryService.js";
@@ -471,7 +472,11 @@ export async function generateGame(request, response, next) {
     };
     result.game.buildStatus = "building";
     logger.log("request.save.start", { gameId: result.game.id, templateId: result.game.templateId });
-    const persistence = await saveGamePackage(result.game);
+    await upsertBuildingGamePackage(result.game);
+    const persistence = {
+      database: "connected",
+      storage: "deferred-to-background-jobs"
+    };
     logger.log("request.save.done", {
       gameId: result.game.id,
       persistence: persistence?.storage ?? null,

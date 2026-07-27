@@ -278,9 +278,9 @@ function missingPremiumFeatures(code) {
     ["impact screen shake", /\b(screenShake|cameraShake|shake(?:Time|Amount|Intensity|Offset)?)\b/i],
     ["start menu", /\b(startMenu|startScreen|gameState\s*=\s*["'`]start|state\s*=\s*["'`]menu)\b/i],
     ["pause and resume", /\bpause(?:d|Menu)?\b[\s\S]{0,120}\bresume\b|\bresume\b[\s\S]{0,120}\bpause/i],
-    ["game-over or victory menu", /\b(gameOver|game-over|victory|winScreen|endScreen)\b/i],
+    ["game-over or victory menu", /\b(game[\s_-]?over|victory|winScreen|endScreen)\b/i],
     ["progression or escalating challenge", /\b(level|wave|difficulty|combo|milestone|unlock)\b/i],
-    ["consistent palette or art direction", /\b(palette|colorPalette|themeColors|COLORS)\b/]
+    ["consistent palette or art direction", /\b(palette|colorPalette|themeColors|COLORS|PAL)\b/]
   ];
 
   return checks.filter(([, pattern]) => !pattern.test(code)).map(([label]) => label);

@@ -123,6 +123,31 @@ export async function saveGamePackage(gamePackage) {
   };
 }
 
+// Fast-path for the short request that creates a background generation job.
+// Unlike saveGamePackage, this does not wait for finalized 0G Storage uploads;
+// immutable provenance is recorded asynchronously by the running build job.
+export async function upsertBuildingGamePackage(gamePackage) {
+  const collection = await getGameCollection();
+  const { _id, createdAt, zeroGStorage, assetZeroGStorage, ...fields } = gamePackage;
+  void _id;
+  void createdAt;
+  void zeroGStorage;
+  void assetZeroGStorage;
+  await collection.updateOne(
+    { id: gamePackage.id },
+    {
+      $set: {
+        ...fields,
+        updatedAt: new Date()
+      },
+      $setOnInsert: {
+        createdAt: new Date()
+      }
+    },
+    { upsert: true }
+  );
+}
+
 export async function getGamePackageById(id) {
   const collection = await getGameCollection();
   return collection.findOne({ id }, { projection: { _id: 0 } });

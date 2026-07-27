@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   getGamePackageById,
   saveGamePackage,
+  upsertBuildingGamePackage,
   updateGamePackageFields
 } from "../services/databaseService.js";
 import { getJob, serializeJob, startJob } from "../services/jobService.js";
@@ -290,7 +291,7 @@ export async function generateCode(request, response, next) {
         }
       };
       if (!existingGame) {
-        await saveGamePackage(thumbnailGame);
+        await upsertBuildingGamePackage(thumbnailGame);
       } else {
         await updateGamePackageFields(input.gamePackage.id, {
           title,
