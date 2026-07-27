@@ -34,6 +34,7 @@ import {
 } from "../services/socialService.js";
 import { logActivity, getGameTitle, getUserActivities, getRecentActivities } from "../services/activityService.js";
 import { getPointSummary, setProfileUsername } from "../services/pointsService.js";
+import { authIdentityAliases, authOwnsIdentity } from "../services/identityAliasService.js";
 
 // ─── Schemas ───────────────────────────────────────────────────────────────
 
@@ -449,7 +450,10 @@ const followSchema = z.object({
 
 export async function handleToggleFollow(req, res, next) {
   try {
-    const { creatorId, userId } = followSchema.parse(req.body);
+    const { creatorId, userId: submittedUserId } = followSchema.parse(req.body);
+    // Never let a wallet/Telegram alias become the identity of the follower
+    // when an authenticated Privy identity is available.
+    const userId = req.auth?.privyUserId ?? req.auth?.userId ?? submittedUserId;
     if (creatorId === userId) {
       res.status(400).json({ error: "You cannot follow yourself" });
       return;
@@ -470,7 +474,11 @@ export async function handleGetFollowStatus(req, res, next) {
 
 export async function handleGetFollowing(req, res, next) {
   try {
-    res.json(await getFollowingList(req.params.userId));
+    const requestedId = req.params.userId;
+    const aliases = authOwnsIdentity(req.auth, requestedId)
+      ? authIdentityAliases(req.auth)
+      : [requestedId];
+    res.json(await getFollowingList(requestedId, aliases));
   } catch (error) {
     next(error);
   }
@@ -478,7 +486,12 @@ export async function handleGetFollowing(req, res, next) {
 
 export async function handleGetCreatorStats(req, res, next) {
   try {
-    res.json(await getCreatorStats(req.params.creatorId));
+    const requestedId = req.params.creatorId;
+    const canonicalCreatorId = req.auth?.privyUserId ?? req.auth?.userId ?? requestedId;
+    const aliases = authOwnsIdentity(req.auth, requestedId)
+      ? authIdentityAliases(req.auth)
+      : [requestedId];
+    res.json(await getCreatorStats(canonicalCreatorId, aliases));
   } catch (error) {
     next(error);
   }

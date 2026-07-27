@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { optionalAuth } from "../services/authService.js";
 import {
   handleToggleLike,
   handleGetLikeStatus,
@@ -38,6 +39,10 @@ import {
 } from "../controllers/socialController.js";
 
 export const socialRouter = Router();
+
+// Resolve the authenticated Privy identity (and its legacy wallet/Telegram
+// aliases) whenever a token is available. Public game counters still work.
+socialRouter.use(optionalAuth);
 
 // Aggregate stats for a game
 socialRouter.get("/stats/:gameId", handleGetSocialStats);

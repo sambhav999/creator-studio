@@ -590,15 +590,16 @@ export async function getFollowStatus(creatorId, followerId) {
   return { creatorId, following: followerId ? set.has(followerId) : false, followers: set.size };
 }
 
-export async function getFollowingList(followerId) {
+export async function getFollowingList(followerId, followerAliases = [followerId]) {
+  const aliases = [...new Set(followerAliases.filter(Boolean))];
   const col = await getCollection(COLLECTIONS.follows);
   if (col) {
-    const docs = await col.find({ followerId }).toArray();
-    return { followerId, following: docs.map((d) => d.creatorId) };
+    const docs = await col.find({ followerId: { $in: aliases } }).toArray();
+    return { followerId, following: [...new Set(docs.map((d) => d.creatorId))] };
   }
   const following = [];
   for (const [creatorId, set] of memoryStore.follows) {
-    if (set.has(followerId)) following.push(creatorId);
+    if (aliases.some((alias) => set.has(alias))) following.push(creatorId);
   }
   return { followerId, following };
 }
@@ -607,20 +608,21 @@ export async function getFollowingList(followerId) {
 //  CREATOR STATS (real profile numbers)
 // ═══════════════════════════════════════════════════════════════════════════
 
-export async function getCreatorStats(creatorId) {
+export async function getCreatorStats(creatorId, creatorAliases = [creatorId]) {
   try {
+    const aliases = [...new Set(creatorAliases.filter(Boolean))];
     const games = await getGameCollection();
     const ownGames = await games
-      .find({ creatorId, tier: { $ne: "template" } }, { projection: { id: 1, views: 1 } })
+      .find({ creatorId: { $in: aliases }, tier: { $ne: "template" } }, { projection: { id: 1, views: 1 } })
       .toArray();
     const gameIds = ownGames.map((g) => g.id);
     const db = await getDatabase();
     const [likes, followers, shares, remixes, featured, points] = await Promise.all([
       gameIds.length ? db.collection(COLLECTIONS.likes).countDocuments({ gameId: { $in: gameIds } }) : 0,
-      db.collection(COLLECTIONS.follows).countDocuments({ creatorId }),
+      db.collection(COLLECTIONS.follows).countDocuments({ creatorId: { $in: aliases } }),
       gameIds.length ? db.collection(COLLECTIONS.shares).countDocuments({ gameId: { $in: gameIds } }) : 0,
       gameIds.length ? games.countDocuments({ remixOf: { $in: gameIds } }) : 0,
-      games.countDocuments({ creatorId, "browserFeature.featured": true }),
+      games.countDocuments({ creatorId: { $in: aliases }, "browserFeature.featured": true }),
       getCreatorScoreSummary(creatorId),
     ]);
     const plays = ownGames.reduce((total, g) => total + (g.views ?? 0), 0);
