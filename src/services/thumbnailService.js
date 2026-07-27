@@ -1,10 +1,13 @@
 import { getDatabase, getGameCollection } from "./databaseService.js";
+import sharp from "sharp";
 import { isSpacesConfigured, uploadPublicObject } from "./spacesStorageService.js";
 import { generateImageAsset } from "./zeroGService.js";
 import { putBufferOnZeroG } from "./zeroGStorage.js";
 import { logActivityOnChain, ACTIVITY } from "./zeroGActivityLog.js";
 
 const COLLECTION_NAME = "thumbnails";
+const THUMBNAIL_WIDTH = 384;
+const THUMBNAIL_HEIGHT = 576;
 
 export async function getThumbnailCollection() {
   const database = await getDatabase();
@@ -97,14 +100,15 @@ export async function generateAndStoreGameThumbnail(game) {
     game.visuals?.mood,
     (game.visuals?.colors ?? []).slice(0, 3).join(" "),
     `the bold uppercase title "${coverTitle(game.title)}" spelled exactly, in a clean large display font across the top like a game cover`,
-    "polished colorful game cover art, clear gameplay subject, crisp legible lettering"
+    "polished colorful game cover art, clear gameplay subject, crisp legible lettering",
+    "vertical 2:3 portrait composition, keep the title and important subjects inside safe margins"
   ].filter(Boolean).join(", ");
 
-  // Covers don't need full resolution — 512px keeps DB documents ~4x smaller.
-  // Not every image model accepts every size, so fall back to the default.
+  // Request a native 2:3 portrait composition, then normalize the stored file
+  // to the exact dimensions used by mobile and tablet game cards.
   let result;
   try {
-    result = await generateImageAsset({ prompt, size: "512x512" });
+    result = await generateImageAsset({ prompt, size: "1024x1536" });
   } catch {
     result = await generateImageAsset({ prompt });
   }
@@ -120,6 +124,15 @@ export async function generateAndStoreGameThumbnail(game) {
     throw new Error("Image agent returned no image");
   }
 
+  buffer = await sharp(buffer)
+    .resize(THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT, {
+      fit: "cover",
+      position: "centre"
+    })
+    .webp({ quality: 88 })
+    .toBuffer();
+  contentType = "image/webp";
+
   // Primary store: DigitalOcean Spaces — the public URL goes onto the game
   // record in MongoDB and the frontend renders it directly. Falls back to the
   // Mongo-served thumbnail when Spaces is unavailable.
@@ -128,31 +141,55 @@ export async function generateAndStoreGameThumbnail(game) {
     objectId: game.id,
     buffer,
     contentType,
-    fileName: `${game.id}.png`,
-    metadata: { gameId: game.id, title: game.title ?? null, sourceModel: result.model ?? null }
+    fileName: `${game.id}.webp`,
+    metadata: {
+      gameId: game.id,
+      title: game.title ?? null,
+      sourceModel: result.model ?? null,
+      width: THUMBNAIL_WIDTH,
+      height: THUMBNAIL_HEIGHT
+    }
   });
   let thumbnailUrl;
   if (isSpacesConfigured()) {
     try {
-      thumbnailUrl = await uploadPublicObject(
+      const uploadedUrl = await uploadPublicObject(
         `thumbnails/${encodeURIComponent(game.id)}`,
         buffer,
         contentType
       );
+      thumbnailUrl = `${uploadedUrl}?v=${Date.now()}`;
     } catch (error) {
       console.warn("Spaces upload failed; falling back to Mongo thumbnail", { message: error.message });
     }
   }
   if (!thumbnailUrl) {
-    await uploadThumbnail(game.id, buffer, contentType, `${game.id}.png`);
+    await uploadThumbnail(game.id, buffer, contentType, `${game.id}.webp`);
     thumbnailUrl = `/api/thumbnails/${encodeURIComponent(game.id)}`;
   }
 
   const games = await getGameCollection();
   await games.updateOne(
     { id: game.id },
-    { $set: { thumbnailUrl, thumbnailModel: result.model, thumbnailZeroGStorage: zeroGStorage, updatedAt: new Date() } }
+    {
+      $set: {
+        thumbnailUrl,
+        thumbnailModel: result.model,
+        thumbnailWidth: THUMBNAIL_WIDTH,
+        thumbnailHeight: THUMBNAIL_HEIGHT,
+        thumbnailZeroGStorage: zeroGStorage,
+        updatedAt: new Date()
+      }
+    }
   );
 
-  return { gameId: game.id, thumbnailUrl, model: result.model, bytes: buffer.length, zeroGStorage };
+  return {
+    gameId: game.id,
+    thumbnailUrl,
+    model: result.model,
+    bytes: buffer.length,
+    width: THUMBNAIL_WIDTH,
+    height: THUMBNAIL_HEIGHT,
+    zeroGStorage
+  };
 }
