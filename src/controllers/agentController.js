@@ -110,11 +110,15 @@ function fallbackEnhancedPrompt(rawPrompt) {
     .replace(/^##\s*Title\s*\n\s*\*\*[^*\n]+\*\*\s*/i, "")
     .trim();
   const wordCount = withoutExistingTitle.split(/\s+/).filter(Boolean).length;
-  const supportingDetail = wordCount < 110
+  const supportingDetail = wordCount < 170
     ? [
         "Make the core interaction immediately understandable and fully playable on desktop and mobile.",
         "Use responsive touch and keyboard controls, clear visual feedback, polished animation, layered sound effects, and lightweight original music.",
         "Build a satisfying gameplay loop with gradual progression, fair challenge, readable objectives, stable performance, and explicit success, failure, restart, and pause states.",
+        "Describe a specific environment and scenery that fit the requested genre, including foreground details, layered backgrounds, atmosphere, lighting, weather or ambient motion when appropriate.",
+        "Define an original main character, recognizable obstacles, collectibles, enemies, and environmental props with a consistent premium art direction and color palette.",
+        "Add satisfying particles, transitions, impact reactions, camera feedback, and readable interface elements without obscuring gameplay.",
+        "Explain how the environment changes as difficulty progresses so later stages feel visually and mechanically richer.",
         "Keep every mechanic, environment, character, interface element, and generated asset consistent with the requested genre and theme."
       ].join(" ")
     : "";
@@ -151,8 +155,8 @@ export async function enhancePrompt(request, response, next) {
         model,
         temperature: 0.45,
         // MiniMax-M3 emits a hidden reasoning block before the answer. Leave
-        // enough room for that block plus the requested ~150-word prompt.
-        maxTokens: 1400,
+        // enough room for that block plus the requested ~200-word prompt.
+        maxTokens: 1800,
         timeoutMs: 90000,
         retries: 1,
         messages: [
@@ -164,9 +168,11 @@ export async function enhancePrompt(request, response, next) {
               "The first two lines must use exactly this format:",
               "## Title",
               "**A concise original game title**",
-              "After the title, write approximately 150 words of detailed game specification.",
+              "After the title, write 180–220 words of detailed game specification, targeting approximately 200 words.",
               "Preserve the user's intended game name, genre, characters, theme, and core mechanic.",
               "Add concrete controls, gameplay loop, scoring, progression, challenge, visual style, sound, responsive mobile layout, and win/lose conditions.",
+              "Describe suitable scenery and environment in concrete visual terms: foreground elements, layered background, atmosphere, lighting, environmental motion, obstacles, props, collectibles, character appearance, effects, and a consistent color palette.",
+              "When the user references a famous game, preserve the gameplay inspiration but specify original characters, scenery, names, and artwork.",
               "Do not change the requested game into a different genre or reuse an unrelated template.",
               "Apart from the required Title heading, do not add headings, bullet points, commentary, quotation marks, or implementation code.",
               "Return only the enhanced prompt."
