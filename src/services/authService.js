@@ -92,7 +92,10 @@ export function extractPrivyIdentity(user, fallbackUserId) {
   const telegramAlias = telegramUserId ? `tg_${telegramUserId}` : null;
 
   return {
-    userId: privyUserId ?? tonWalletAddress ?? evmWalletAddress ?? fallbackWalletAddress ?? telegramAlias,
+    // EVM is the canonical product identity because subscriptions and 0G
+    // activity are wallet keyed. Privy/TON/Telegram identities remain aliases
+    // so older records continue to resolve to the same authenticated account.
+    userId: evmWalletAddress ?? privyUserId ?? tonWalletAddress ?? fallbackWalletAddress ?? telegramAlias,
     privyUserId,
     evmWalletAddress,
     tonWalletAddress,

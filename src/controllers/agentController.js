@@ -395,8 +395,14 @@ export async function getJobStatus(request, response) {
 export async function backgroundTask(request, response, next) {
   try {
     const input = backgroundSchema.parse(request.body);
-    const result = await runBackgroundTask(input);
-    response.json({ task: "background", result });
+    // Background model calls can take several minutes. Return immediately and
+    // let the client poll the existing jobs endpoint instead of keeping an HTTP
+    // request open through browser/proxy timeouts.
+    const job = startJob("background", (updateProgress) => {
+      updateProgress({ stage: "generating", task: input.task });
+      return runBackgroundTask(input);
+    });
+    response.status(202).json({ task: "background", ...serializeJob(job) });
   } catch (error) {
     next(error);
   }

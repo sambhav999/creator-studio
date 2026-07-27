@@ -4,6 +4,10 @@ import { verifyAndRecordGenerationPayment } from "./zeroGPaymentService.js";
 import { verifyAndRecordTonGenerationPayment } from "./tonPaymentService.js";
 import { normalizeTier } from "./zeroGService.js";
 import { consumeGenerationStarsOrder, generationStarsPrice, starsPaymentAvailable, consumeEditStarsOrder, editStarsPrice } from "./telegramStarsService.js";
+import {
+  minimumSubscriptionTierForGeneration,
+  requireCreatorSubscription
+} from "./creatorSubscriptionService.js";
 
 // Reads a non-negative number from env, else the given fallback.
 function envPrice(name, fallback) {
@@ -192,6 +196,37 @@ export async function assertGenerationAccess({
     };
   }
 
+  // Subscription billing replaces the legacy pay-per-generation path. Keep the
+  // old TON/Stars/0G transaction flow available only when explicitly selected
+  // for a rollback during deployment.
+  if (String(process.env.GENERATION_BILLING_MODE || "subscription").toLowerCase() !== "legacy") {
+    const requiredTier = minimumSubscriptionTierForGeneration(tier);
+    if (!evmWalletAddress) {
+      const error = new Error("Connect an EVM wallet and subscribe to generate another game.");
+      error.status = 402;
+      error.code = "SUBSCRIPTION_REQUIRED";
+      error.subscription = {
+        required: true,
+        walletRequired: true,
+        requiredTier,
+        requiredTierName: requiredTier === 2 ? "Creator Pro" : "Creator Plus",
+        chainId: 16661
+      };
+      throw error;
+    }
+    const subscription = await requireCreatorSubscription(evmWalletAddress, tier);
+    return {
+      free: false,
+      subscription: true,
+      currency: "0G",
+      amount: 0,
+      tier: paymentRequirement.tier,
+      existingGames,
+      paymentMethod: "subscription",
+      creatorSubscription: subscription
+    };
+  }
+
   // Methods this user can actually pay with, auto-detected from their identity.
   const methods = buildGenerationMethods({ tier, evmWalletAddress, tonWalletAddress, telegramUserId: auth?.telegramUserId });
 
@@ -340,6 +375,8 @@ export function generationAccessMetadata(generationAccess) {
     priceTON: generationAccess.currency === "TON" && !generationAccess.free ? generationAccess.amount : 0,
     priceStars: generationAccess.currency === "XTR" && !generationAccess.free ? generationAccess.amount : 0,
     paymentMethod: generationAccess.paymentMethod ?? null,
+    subscription: generationAccess.subscription ?? false,
+    creatorSubscription: generationAccess.creatorSubscription ?? null,
     starsOrderId: generationAccess.starsOrderId ?? null,
     paymentTxHash: generationAccess.paymentTxHash ?? null,
     payment: generationAccess.payment ?? null,

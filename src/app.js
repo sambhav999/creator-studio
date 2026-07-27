@@ -13,6 +13,7 @@ import { templateRouter } from "./routes/templateRoutes.js";
 import { thumbnailRouter } from "./routes/thumbnailRoutes.js";
 import { referralAdminRouter, referralRouter } from "./routes/referralRoutes.js";
 import { starRouter, telegramRouter } from "./routes/starRoutes.js";
+import { creatorSubscriptionRouter } from "./routes/creatorSubscriptionRoutes.js";
 import { getDatabaseConfig } from "./services/databaseService.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 import { getZeroGConfig } from "./services/zeroGService.js";
@@ -96,6 +97,7 @@ const setupRoutes = (prefix) => {
   app.use(`${prefix}/dashboard`, dashboardRouter);
   app.use(`${prefix}/social`, socialRouter);
   app.use(`${prefix}/stars`, starRouter);
+  app.use(`${prefix}/creator-subscription`, creatorSubscriptionRouter);
   app.use(`${prefix}/telegram`, telegramRouter);
   app.use(`${prefix}/thumbnails`, thumbnailRouter);
   app.use(`${prefix}/referral`, referralRouter);

@@ -12,6 +12,7 @@ export function errorHandler(error, _request, response, _next) {
   response.status(error.status ?? 500).json({
     error: error.message ?? "Internal server error",
     ...(error.code ? { code: error.code } : {}),
-    ...(error.payment ? { payment: error.payment } : {})
+    ...(error.payment ? { payment: error.payment } : {}),
+    ...(error.subscription ? { subscription: error.subscription } : {})
   });
 }

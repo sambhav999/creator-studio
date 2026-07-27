@@ -7,7 +7,7 @@ import {
   verifyPrivySession
 } from "../src/services/authService.js";
 
-test("derivePrivyUserId uses Privy id as the canonical cross-app identity", () => {
+test("derivePrivyUserId uses the verified EVM wallet as the canonical identity", () => {
   const userId = derivePrivyUserId({
     id: "did:privy:user",
     linked_accounts: [
@@ -28,7 +28,7 @@ test("derivePrivyUserId uses Privy id as the canonical cross-app identity", () =
     ]
   });
 
-  assert.equal(userId, "did:privy:user");
+  assert.equal(userId, "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd");
 });
 
 test("extractPrivyIdentity keeps wallets and Telegram as aliases", () => {
@@ -52,7 +52,7 @@ test("extractPrivyIdentity keeps wallets and Telegram as aliases", () => {
     ]
   });
 
-  assert.equal(identity.userId, "did:privy:user");
+  assert.equal(identity.userId, "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd");
   assert.equal(identity.evmWalletAddress, "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd");
   assert.equal(identity.tonWalletAddress, "EQBtonWalletAddress");
   assert.equal(identity.telegramUserId, "12345");

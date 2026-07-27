@@ -499,11 +499,19 @@ export async function createOrchestrationPlan({ prompt, context, maxTokens = 180
   });
 }
 
-export async function runBackgroundTask({ task, input, models = zeroGModels }) {
+export async function runBackgroundTask({
+  task,
+  input,
+  models = zeroGModels,
+  timeoutMs = 10 * 60 * 1000,
+  retries = 0
+}) {
   return callZeroGChat({
     model: models.background || models.general,
     temperature: 0.2,
     maxTokens: 2000,
+    timeoutMs,
+    retries,
     messages: [
       {
         role: "system",
