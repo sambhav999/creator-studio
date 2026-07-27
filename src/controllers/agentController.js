@@ -6,10 +6,6 @@ import {
 } from "../services/databaseService.js";
 import { getJob, serializeJob, startJob } from "../services/jobService.js";
 import { generateAndStoreGameThumbnail } from "../services/thumbnailService.js";
-import {
-  gameplayAssetManifest,
-  generateGameplayAssets
-} from "../services/gameplayAssetService.js";
 import { createRefinementBundle } from "../services/refinementService.js";
 import { assertGenerationAccess, assertEditAccess, generationAccessMetadata } from "../services/generationAccessService.js";
 import { recordPaymentReceipt, recordGameVersion, recordReferenceInput, recordVoiceInput } from "../services/zeroGProvenanceService.js";
@@ -318,40 +314,11 @@ export async function generateCode(request, response, next) {
     if (isEdit) logActivityOnChain(ACTIVITY.GAME_EDITED, input.gamePackage?.id ?? "");
     const job = startJob("code-generation", async (updateProgress) => {
       let refinement;
-      let gameplayAssets;
       try {
-        if (!isEdit) {
-          const assetGame = {
-            ...input.gamePackage,
-            generation: {
-              ...(input.gamePackage.generation ?? {}),
-              prompt: input.request ?? input.gamePackage.generation?.prompt ?? ""
-            }
-          };
-          const manifest = gameplayAssetManifest(assetGame);
-          const gamePackageWithAssets = {
-            ...assetGame,
-            gameplayAssets: { status: "generating", manifest }
-          };
-          [refinement, gameplayAssets] = await Promise.all([
-            createRefinementBundle(
-              { ...input, gamePackage: gamePackageWithAssets, strategy, models },
-              { onProgress: updateProgress }
-            ),
-            generateGameplayAssets(assetGame, updateProgress)
-          ]);
-          const usesGeneratedAssets =
-            /drawImage\s*\(/.test(refinement?.generatedCode ?? "") &&
-            /gameplayAssets/.test(refinement?.generatedCode ?? "");
-          if (!usesGeneratedAssets) {
-            throw new Error("Generated code did not integrate the gameplay asset manifest");
-          }
-        } else {
-          refinement = await createRefinementBundle(
-            { ...input, strategy, models },
-            { onProgress: updateProgress }
-          );
-        }
+        refinement = await createRefinementBundle(
+          { ...input, strategy, models },
+          { onProgress: updateProgress }
+        );
       } catch (error) {
         if (input.gamePackage?.id) {
           await updateGamePackageFields(input.gamePackage.id, {
@@ -377,7 +344,6 @@ export async function generateCode(request, response, next) {
               await updateGamePackageFields(input.gamePackage.id, {
                 tier: "ai-refinement",
                 refinement,
-                ...(gameplayAssets ? { gameplayAssets } : {}),
                 buildStatus: refinement?.generatedCode || strategy !== "pure-agent"
                   ? "ready"
                   : "failed"
@@ -391,7 +357,6 @@ export async function generateCode(request, response, next) {
                 creatorId,
                 tier: "ai-refinement",
                 refinement,
-                ...(gameplayAssets ? { gameplayAssets } : {}),
                 buildStatus: refinement?.generatedCode || strategy !== "pure-agent"
                   ? "ready"
                   : "failed",
@@ -410,7 +375,7 @@ export async function generateCode(request, response, next) {
           console.warn("Could not persist refinement to database", { message: error.message });
         }
       }
-      return gameplayAssets ? { ...refinement, gameplayAssets } : refinement;
+      return refinement;
     });
     response.status(202).json({ task: "code-generation", ...serializeJob(job) });
   } catch (error) {
