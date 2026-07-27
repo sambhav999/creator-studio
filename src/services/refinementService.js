@@ -45,8 +45,22 @@ function attachValidatedRuntimeShell(code) {
   return source.includes("KULT_VALIDATED_RUNTIME_V1") ? source : `${VALIDATED_RUNTIME_SHELL}\n\n${source}`;
 }
 
-function buildPromptBundle({ gamePackage, request, plan }) {
+function buildPromptBundle({ gamePackage, request, plan, premium = false }) {
+  const premiumRules = premium
+    ? [
+        "ULTRA PREMIUM QUALITY IS MANDATORY:",
+        "- Build polished procedural visuals directly in Canvas/CSS/SVG; do not request or depend on separately generated assets.",
+        "- Include purposeful motion: entrance transitions, responsive gameplay animation, impact flashes, particle bursts, and restrained screen shake on major impacts.",
+        "- Include a polished start menu, touch-accessible pause/resume, game-over or victory menu, and an obvious tap/click restart flow.",
+        "- Include meaningful progression such as increasing difficulty, levels/waves, unlocks, combo milestones, or escalating challenge appropriate to the game.",
+        "- Use one intentional art direction: a small named color palette, consistent shapes, typography, lighting, HUD, and effects.",
+        "- Prioritize game feel: immediate input response, readable collision feedback, satisfying scoring feedback, and smooth transitions.",
+        "- Do not add generated audio or Web Audio. Premium quality must come from gameplay and visuals.",
+        "- Treat every item above as required functionality, not optional decoration."
+      ]
+    : [];
   return {
+    premium,
     system: [
       "You are an expert browser game developer.",
       "Generate a fully playable browser game as one complete JavaScript module.",
@@ -62,7 +76,8 @@ function buildPromptBundle({ gamePackage, request, plan }) {
       "When a run ends (game over or win), call window.reportScore(finalScore) if it exists so the score reaches the platform leaderboard.",
       "Maintain responsive sizing, restart behavior, score/state feedback, and a 60 FPS target.",
       "A validated runtime shell named KULT_RUNTIME is prepended automatically. Use KULT_RUNTIME.canvas, KULT_RUNTIME.ctx, KULT_RUNTIME.input, KULT_RUNTIME.drawAsset(name,...), KULT_RUNTIME.reportScore(score), and KULT_RUNTIME.consumeRestart() instead of recreating those systems.",
-      "Focus generated code on game-specific state, rules, update, collision, and render functions; do not regenerate generic canvas setup, resize, input, asset-loader, restart-input, or score-bridge boilerplate."
+      "Focus generated code on game-specific state, rules, update, collision, and render functions; do not regenerate generic canvas setup, resize, input, asset-loader, restart-input, or score-bridge boilerplate.",
+      ...premiumRules
     ].join("\n"),
     user: [
       `Template: ${gamePackage.templateName}`,
@@ -193,7 +208,15 @@ function findSyntaxLine(code) {
 
 // 12 minutes per attempt, one retry: worst case stays inside a 15-minute
 // generation budget instead of the previous 20min x 3 attempts.
-async function callCodingStage({ model, system, user, maxTokens = 3500, timeoutMs = 720000, onChunk }) {
+async function callCodingStage({
+  model,
+  system,
+  user,
+  maxTokens = 3500,
+  timeoutMs = 720000,
+  retries = 1,
+  onChunk
+}) {
   const messages = [
     { role: "system", content: system },
     { role: "user", content: user }
@@ -203,7 +226,7 @@ async function callCodingStage({ model, system, user, maxTokens = 3500, timeoutM
     temperature: 0.35,
     maxTokens,
     timeoutMs,
-    retries: 1,
+    retries,
     messages,
     onChunk
   });
@@ -217,7 +240,7 @@ async function callCodingStage({ model, system, user, maxTokens = 3500, timeoutM
     temperature: 0.35,
     maxTokens,
     timeoutMs,
-    retries: 1,
+    retries,
     onChunk,
     messages: [
       ...messages,
@@ -247,6 +270,27 @@ function missingRuntimeFeatures(code) {
   ];
 
   return checks.filter(([, pattern]) => !pattern.test(code)).map(([label]) => label);
+}
+
+function missingPremiumFeatures(code) {
+  const checks = [
+    ["procedural particles", /\bparticles?\b|\bsparks?\b|\bconfetti\b|\bburst\b/i],
+    ["impact screen shake", /\b(screenShake|cameraShake|shake(?:Time|Amount|Intensity|Offset)?)\b/i],
+    ["start menu", /\b(startMenu|startScreen|gameState\s*=\s*["'`]start|state\s*=\s*["'`]menu)\b/i],
+    ["pause and resume", /\bpause(?:d|Menu)?\b[\s\S]{0,120}\bresume\b|\bresume\b[\s\S]{0,120}\bpause/i],
+    ["game-over or victory menu", /\b(gameOver|game-over|victory|winScreen|endScreen)\b/i],
+    ["progression or escalating challenge", /\b(level|wave|difficulty|combo|milestone|unlock)\b/i],
+    ["consistent palette or art direction", /\b(palette|colorPalette|themeColors|COLORS)\b/]
+  ];
+
+  return checks.filter(([, pattern]) => !pattern.test(code)).map(([label]) => label);
+}
+
+function missingRequiredFeatures(code, premium) {
+  return [
+    ...missingRuntimeFeatures(code),
+    ...(premium ? missingPremiumFeatures(code) : [])
+  ];
 }
 
 // From-scratch generation is capped at ~15,000 characters of code: generation
@@ -285,28 +329,47 @@ async function generateWithModel(promptBundle, model, onProgress, models = zeroG
   // One repair pass on the fast background model: catches modules that came
   // back without a loop, input, or canvas wiring, at a fraction of the
   // coding model's latency.
-  const missing = missingRuntimeFeatures(generatedCode);
+  const missing = missingRequiredFeatures(generatedCode, promptBundle.premium);
   if (missing.length > 0) {
-    const repair = await callCodingStage({
-      model: models.repair || models.coding,
-      maxTokens: SCRATCH_MAX_TOKENS,
-      onChunk: (chars) => onProgress?.({ stage: "repairing", chars }),
-      system: [
-        promptBundle.system,
-        "Repair the supplied incomplete src/main.js.",
-        "Keep your thinking/reasoning extremely brief and concise to save output tokens.",
-        "Return one complete executable module, not an explanation.",
-        "It must select document.querySelector(\"#game\"), obtain a 2D context, render the game, handle pointer/touch and keyboard input, run requestAnimationFrame, and support restart (KeyR).",
-        `The previous output was missing: ${missing.join(", ")}.`
-      ].join("\n"),
-      user: [promptBundle.user, "\nINCOMPLETE MODULE:\n", generatedCode].join("\n")
-    });
-    const repairedCode = attachValidatedRuntimeShell(stripModuleExports(stripMarkdownFence(repair.content)));
-    usages.push(repair.usage);
-    stages.repair = { model: models.repair || models.coding, usage: repair.usage };
-    // Only adopt the repair when it actually closes gaps.
-    if (missingRuntimeFeatures(repairedCode).length < missing.length) {
-      generatedCode = repairedCode;
+    try {
+      const repair = await callCodingStage({
+        model: models.repair || models.coding,
+        maxTokens: SCRATCH_MAX_TOKENS,
+        timeoutMs: promptBundle.premium ? 120000 : 720000,
+        retries: promptBundle.premium ? 0 : 1,
+        onChunk: (chars) => onProgress?.({ stage: "repairing", chars }),
+        system: [
+          promptBundle.system,
+          "Repair the supplied incomplete src/main.js.",
+          "Keep your thinking/reasoning extremely brief and concise to save output tokens.",
+          "Return one complete executable module, not an explanation.",
+          "It must select document.querySelector(\"#game\"), obtain a 2D context, render the game, handle pointer/touch and keyboard input, run requestAnimationFrame, and support restart (KeyR).",
+          ...(promptBundle.premium
+            ? [
+                "This is the single Ultra polish repair. Preserve working gameplay and add only the missing premium requirements.",
+                "Complete this repair within the strict two-minute polish budget. Do not add audio."
+              ]
+            : []),
+          `The previous output was missing: ${missing.join(", ")}.`
+        ].join("\n"),
+        user: [promptBundle.user, "\nINCOMPLETE MODULE:\n", generatedCode].join("\n")
+      });
+      const repairedCode = attachValidatedRuntimeShell(stripModuleExports(stripMarkdownFence(repair.content)));
+      usages.push(repair.usage);
+      stages.repair = { model: models.repair || models.coding, usage: repair.usage };
+      // Only adopt the repair when it actually closes gaps.
+      if (missingRequiredFeatures(repairedCode, promptBundle.premium).length < missing.length) {
+        generatedCode = repairedCode;
+      }
+    } catch (error) {
+      if (!promptBundle.premium) throw error;
+      // The premium polish pass is optional after a playable first result.
+      // If its strict budget expires, return the original build immediately.
+      stages.repair = {
+        model: models.repair || models.coding,
+        skipped: true,
+        reason: error.message
+      };
     }
   }
 
@@ -585,7 +648,7 @@ async function ensureRuntimeRuns(generated, promptBundle, gamePackage, reference
 }
 
 export async function createRefinementBundle(
-  { gamePackage, request, refinementLevel, strategy, baseCode, plan, models = zeroGModels },
+  { gamePackage, request, refinementLevel, strategy, baseCode, plan, tier, models = zeroGModels },
   { onProgress } = {}
 ) {
   if (!gamePackage) {
@@ -599,7 +662,8 @@ export async function createRefinementBundle(
   const promptBundle = buildPromptBundle({
     gamePackage,
     request,
-    plan: strategy === "pure-agent" && !baseCode ? plan : null
+    plan: strategy === "pure-agent" && !baseCode ? plan : null,
+    premium: Number(tier) === 3 && !baseCode
   });
   // When the caller supplies the game's current code (post-creation editing),
   // that code IS the seed — the agent applies the requested change to it.
@@ -639,6 +703,9 @@ export async function createRefinementBundle(
   }
 
   const syntaxOk = !findSyntaxError(generated.generatedCode);
+  const premiumMissing = promptBundle.premium
+    ? missingPremiumFeatures(generated.generatedCode)
+    : [];
 
   return {
     jobId: `refine_${Date.now().toString(36)}`,
@@ -659,7 +726,14 @@ export async function createRefinementBundle(
       "Runs immediately in browser",
       "Pointer and keyboard input works",
       gamePackage.gameplayAssets?.manifest ? "Generated gameplay assets integrated" : "No external images",
-      "Performance target is 60 FPS"
+      "Performance target is 60 FPS",
+      ...(promptBundle.premium
+        ? [
+            premiumMissing.length === 0
+              ? "Ultra premium visual/gameplay checklist validates"
+              : `Ultra premium checklist missing: ${premiumMissing.join(", ")}`
+          ]
+        : [])
     ]
   };
 }
