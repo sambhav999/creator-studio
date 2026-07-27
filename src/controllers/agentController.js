@@ -131,6 +131,28 @@ function fallbackEnhancedPrompt(rawPrompt) {
   ].filter(Boolean).join("\n\n");
 }
 
+function ensureEnhancementLength(enhancedPrompt) {
+  const additions = [
+    "Use layered foreground details, animated midground elements, atmospheric background depth, cohesive lighting, and a restrained premium palette so every scene remains readable during fast gameplay.",
+    "Vary environmental props, hazards, collectibles, and ambient motion as progression advances while keeping the original character silhouettes and interface visually consistent.",
+    "Give every jump, landing, collision, reward, transition, success, and failure an attractive but lightweight visual reaction that performs smoothly on mobile devices."
+  ];
+  let result = String(enhancedPrompt || "").trim();
+  const descriptionWords = () => result
+    .replace(/^##\s*Title\s*$/im, "")
+    .replace(/^\s*\*\*[^*\n]+\*\*\s*$/m, "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .length;
+
+  for (const addition of additions) {
+    if (descriptionWords() >= 180) break;
+    result = `${result}\n\n${addition}`;
+  }
+  return result;
+}
+
 export function getAgentStack(_request, response) {
   response.json(getZeroGConfig());
 }
@@ -198,10 +220,11 @@ export async function enhancePrompt(request, response, next) {
       .replace(/^\s*\*\*[^*\n]+\*\*\s*$/m, "")
       .trim();
     const hasTitle = /^##\s*Title\s*\n\s*\*\*[^*\n]+\*\*/i.test(cleanedPrompt);
-    const enhancedPrompt =
+    const enhancementCandidate =
       hasTitle && description.length >= 80 && !/<\/?think>/i.test(cleanedPrompt)
         ? cleanedPrompt
         : fallbackEnhancedPrompt(prompt);
+    const enhancedPrompt = ensureEnhancementLength(enhancementCandidate);
     response.json({
       rawPrompt: prompt,
       enhancedPrompt,
