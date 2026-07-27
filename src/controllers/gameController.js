@@ -64,6 +64,11 @@ const exportCodeSchema = z.object({
   gamePackage: z.record(z.any())
 }).strict();
 
+function titleFromDetailedPrompt(prompt, fallback = "Custom AI Game") {
+  return String(prompt || "").match(/^##\s*Title\s*\n\s*\*\*([^*\n]+)\*\*/i)?.[1]?.trim()
+    || fallback;
+}
+
 // Created games were previously only visible in the browser that generated
 // them (localStorage). This lists what the backend actually saved so the
 // frontend can show every creation.
@@ -430,6 +435,11 @@ export async function generateGame(request, response, next) {
     const result = await generateGameFromPrompt({ ...input, tier });
     // Attribute the game to its creator so follows and profile stats are real.
     result.game.creatorId = creatorId;
+    result.game.title = titleFromDetailedPrompt(input.prompt, result.game.title);
+    result.game.generation = {
+      ...(result.game.generation ?? {}),
+      prompt: input.prompt
+    };
     result.game.generationAccess = generationAccessMetadata(generationAccess);
     // 0G provenance: how the game was made + a receipt if it was paid.
     recordGenerationProvenance({ game: result.game });
@@ -442,6 +452,7 @@ export async function generateGame(request, response, next) {
       published: false,
       status: "draft"
     };
+    result.game.buildStatus = "building";
     const persistence = await saveGamePackage(result.game);
 
     // Every generated game (hybrid and pure-agent) gets a real cover image:

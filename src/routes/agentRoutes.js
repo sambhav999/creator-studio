@@ -4,6 +4,7 @@ import {
   backgroundTask,
   generateAssets,
   generateCode,
+  enhancePrompt,
   getAgentStack,
   getJobStatus,
   orchestrate,
@@ -16,6 +17,7 @@ export const agentRouter = Router();
 agentRouter.get("/stack", getAgentStack);
 agentRouter.get("/jobs/:jobId", getJobStatus);
 agentRouter.post("/orchestrate", requireAuth, orchestrate);
+agentRouter.post("/enhance-prompt", requireAuth, enhancePrompt);
 agentRouter.post("/code", requireAuth, generateCode);
 agentRouter.post("/background", requireAuth, backgroundTask);
 agentRouter.post("/assets", requireAuth, generateAssets);

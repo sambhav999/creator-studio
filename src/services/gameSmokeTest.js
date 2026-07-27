@@ -225,7 +225,7 @@ export function runtimeSmokeTest(code, gamePackage) {
   try {
     new vm.Script(source, { filename: "generated-game.js" }).runInContext(context, { timeout: 2500 });
   } catch (error) {
-    return { ok: false, error: errorMessage(error), phase: "load" };
+    return { ok: false, error: errorMessage(error), line: errorLine(error), phase: "load" };
   }
 
   // Drive a few frames so crashes inside update/render surface too.
@@ -237,7 +237,7 @@ export function runtimeSmokeTest(code, gamePackage) {
       for (const cb of callbacks) cb(round * 16);
     }
   } catch (error) {
-    return { ok: false, error: errorMessage(error), phase: "frame" };
+    return { ok: false, error: errorMessage(error), line: errorLine(error), phase: "frame" };
   }
 
   return { ok: true, phase: "ok" };
@@ -246,4 +246,9 @@ export function runtimeSmokeTest(code, gamePackage) {
 function errorMessage(error) {
   if (!error) return "Unknown runtime error";
   return String(error.message || error).slice(0, 300);
+}
+
+function errorLine(error) {
+  const match = String(error?.stack || "").match(/generated-game\.js:(\d+):\d+/);
+  return match ? Number(match[1]) : null;
 }

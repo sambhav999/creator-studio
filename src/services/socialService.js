@@ -613,7 +613,20 @@ export async function getCreatorStats(creatorId, creatorAliases = [creatorId]) {
     const aliases = [...new Set(creatorAliases.filter(Boolean))];
     const games = await getGameCollection();
     const ownGames = await games
-      .find({ creatorId: { $in: aliases }, tier: { $ne: "template" } }, { projection: { id: 1, views: 1 } })
+      .find({
+        creatorId: { $in: aliases },
+        tier: { $ne: "template" },
+        $or: [
+          { buildStatus: "ready" },
+          {
+            buildStatus: { $exists: false },
+            $or: [
+              { "refinement.generatedCode": { $type: "string" } },
+              { templateId: { $ne: "pure-agent" } }
+            ]
+          }
+        ]
+      }, { projection: { id: 1, views: 1 } })
       .toArray();
     const gameIds = ownGames.map((g) => g.id);
     const db = await getDatabase();

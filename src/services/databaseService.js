@@ -141,18 +141,20 @@ export async function listGamePackages({
   // Template auto-saves (every studio selection persists one) are not user
   // creations — only prompt-generated games belong in the creations list.
   const filter = { tier: { $ne: "template" } };
-  // Dead drafts: pure-agent games whose build never delivered code. A real
-  // build finishes (or fails) within ~16 minutes, so anything older is junk
-  // from an interrupted build and must not show in any list. createdAt is a
-  // Date for some writers and an ISO string for others — match both shapes.
-  const deadDraftCutoff = new Date(Date.now() - 20 * 60 * 1000);
-  filter.$nor = [
+  // My Games and public discovery contain playable results only. New builds
+  // explicitly become "ready"; legacy records remain visible only when they
+  // contain generated code or are playable Hybrid/template-based creations.
+  filter.$and = [
     {
-      templateId: "pure-agent",
-      "refinement.generatedCode": { $exists: false },
       $or: [
-        { createdAt: { $lt: deadDraftCutoff } },
-        { createdAt: { $type: "string", $lt: deadDraftCutoff.toISOString() } }
+        { buildStatus: "ready" },
+        {
+          buildStatus: { $exists: false },
+          $or: [
+            { "refinement.generatedCode": { $type: "string" } },
+            { templateId: { $ne: "pure-agent" } }
+          ]
+        }
       ]
     }
   ];
@@ -194,7 +196,17 @@ export async function countCreatedGamePackagesByCreator(creatorId) {
   const collection = await getGameCollection();
   return collection.countDocuments({
     creatorId: Array.isArray(creatorId) ? { $in: creatorId } : creatorId,
-    tier: { $ne: "template" }
+    tier: { $ne: "template" },
+    $or: [
+      { buildStatus: "ready" },
+      {
+        buildStatus: { $exists: false },
+        $or: [
+          { "refinement.generatedCode": { $type: "string" } },
+          { templateId: { $ne: "pure-agent" } }
+        ]
+      }
+    ]
   });
 }
 

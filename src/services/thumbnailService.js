@@ -92,6 +92,7 @@ export async function generateAndStoreGameThumbnail(game) {
 
   const prompt = [
     `${game.title} game cover art`,
+    game.generation?.prompt || game.prompt || game.customization?.prompt,
     game.gameplay?.mechanic,
     game.visuals?.mood,
     (game.visuals?.colors ?? []).slice(0, 3).join(" "),

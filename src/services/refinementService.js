@@ -1,6 +1,49 @@
 import { getReferenceGame } from "../data/referenceGames.js";
 import { runtimeSmokeTest } from "./gameSmokeTest.js";
 import { callZeroGChat, zeroGModels } from "./zeroGService.js";
+import vm from "node:vm";
+
+const VALIDATED_RUNTIME_SHELL = `
+// KULT_VALIDATED_RUNTIME_V1
+const KULT_RUNTIME = (() => {
+  const canvas = document.querySelector("#game");
+  const ctx = canvas.getContext("2d");
+  const input = { x: 0, y: 0, down: false, keys: new Set(), restartRequested: false };
+  const resize = () => { canvas.width = window.innerWidth; canvas.height = window.innerHeight; };
+  resize();
+  window.addEventListener("resize", resize);
+  const point = (event) => {
+    const rect = canvas.getBoundingClientRect();
+    input.x = ((event.clientX ?? 0) - rect.left) * canvas.width / Math.max(1, rect.width);
+    input.y = ((event.clientY ?? 0) - rect.top) * canvas.height / Math.max(1, rect.height);
+  };
+  canvas.addEventListener("pointerdown", (event) => { point(event); input.down = true; input.restartRequested = true; });
+  canvas.addEventListener("pointermove", point);
+  canvas.addEventListener("pointerup", (event) => { point(event); input.down = false; });
+  window.addEventListener("keydown", (event) => {
+    input.keys.add(event.code);
+    if (event.code === "KeyR" || event.code === "Space" || event.code === "Enter") input.restartRequested = true;
+  });
+  window.addEventListener("keyup", (event) => input.keys.delete(event.code));
+  const assets = {};
+  for (const [name, url] of Object.entries(gamePackage.gameplayAssets?.manifest ?? {})) {
+    const image = new Image(); image.src = url; assets[name] = image;
+  }
+  const drawAsset = (name, ...args) => {
+    const image = assets[name];
+    if (image?.complete && image.naturalWidth) ctx.drawImage(image, ...args);
+    return Boolean(image?.complete && image.naturalWidth);
+  };
+  const reportScore = (score) => window.reportScore?.(Number(score) || 0);
+  const consumeRestart = () => { const value = input.restartRequested; input.restartRequested = false; return value; };
+  return { canvas, ctx, input, assets, resize, drawAsset, reportScore, consumeRestart };
+})();
+`.trim();
+
+function attachValidatedRuntimeShell(code) {
+  const source = String(code || "");
+  return source.includes("KULT_VALIDATED_RUNTIME_V1") ? source : `${VALIDATED_RUNTIME_SHELL}\n\n${source}`;
+}
 
 function buildPromptBundle({ gamePackage, request, plan }) {
   return {
@@ -17,7 +60,9 @@ function buildPromptBundle({ gamePackage, request, plan }) {
       "Import styles with: import \"./styles.css\";",
       "Do not use export statements anywhere in the module.",
       "When a run ends (game over or win), call window.reportScore(finalScore) if it exists so the score reaches the platform leaderboard.",
-      "Maintain responsive sizing, restart behavior, score/state feedback, and a 60 FPS target."
+      "Maintain responsive sizing, restart behavior, score/state feedback, and a 60 FPS target.",
+      "A validated runtime shell named KULT_RUNTIME is prepended automatically. Use KULT_RUNTIME.canvas, KULT_RUNTIME.ctx, KULT_RUNTIME.input, KULT_RUNTIME.drawAsset(name,...), KULT_RUNTIME.reportScore(score), and KULT_RUNTIME.consumeRestart() instead of recreating those systems.",
+      "Focus generated code on game-specific state, rules, update, collision, and render functions; do not regenerate generic canvas setup, resize, input, asset-loader, restart-input, or score-bridge boilerplate."
     ].join("\n"),
     user: [
       `Template: ${gamePackage.templateName}`,
@@ -27,7 +72,15 @@ function buildPromptBundle({ gamePackage, request, plan }) {
       `Tuning: ${JSON.stringify(gamePackage.gameplay?.tuning)}`,
       `Visual mood: ${gamePackage.visuals?.mood}`,
       `Colors: ${(gamePackage.visuals?.colors ?? []).join(", ")}`,
-      `Assets: ${gamePackage.visuals?.assets}`,
+      `Gameplay asset manifest: ${JSON.stringify(gamePackage.gameplayAssets?.manifest ?? gamePackage.visuals?.assets ?? {})}`,
+      ...(gamePackage.gameplayAssets?.manifest
+        ? [
+            "Load every supplied gameplay asset URL with Image objects and render them with drawImage inside the game.",
+            "Use the player asset for the main character, environment as the gameplay background, and objects for visible world props/obstacles.",
+            "Do not replace supplied assets with circles, rectangles, emoji, Unicode characters, or other placeholder primitives.",
+            "Gracefully draw a temporary fallback only while an image is loading."
+          ]
+        : []),
       `Creator request: ${request || gamePackage.customization?.prompt || "Create a polished playable version of this game."}`,
       ...(plan
         ? [
@@ -58,6 +111,47 @@ function stripModuleExports(code) {
     .replace(/^(\s*)export\s+(const|let|var|function|class|async)/gm, "$1$2");
 }
 
+function functionRegionAtLine(code, targetLine) {
+  if (!targetLine) return null;
+  const source = String(code || "");
+  const starts = [];
+  const pattern = /(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{|(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\([^)]*\)\s*=>\s*\{/g;
+  for (const match of source.matchAll(pattern)) {
+    const start = match.index;
+    const open = source.indexOf("{", start);
+    let depth = 0;
+    let quote = null;
+    let escaped = false;
+    for (let i = open; i < source.length; i += 1) {
+      const ch = source[i];
+      if (quote) {
+        if (escaped) escaped = false;
+        else if (ch === "\\") escaped = true;
+        else if (ch === quote) quote = null;
+        continue;
+      }
+      if (ch === "'" || ch === '"' || ch === "`") { quote = ch; continue; }
+      if (ch === "{") depth += 1;
+      if (ch === "}") depth -= 1;
+      if (depth === 0) {
+        const startLine = source.slice(0, start).split("\n").length;
+        const endLine = source.slice(0, i + 1).split("\n").length;
+        if (targetLine >= startLine && targetLine <= endLine) {
+          starts.push({ name: match[1] || match[2], start, end: i + 1, code: source.slice(start, i + 1) });
+        }
+        break;
+      }
+    }
+  }
+  return starts.sort((a, b) => b.start - a.start)[0] ?? null;
+}
+
+function replaceFunctionRegion(moduleCode, region, replacement) {
+  const clean = stripModuleExports(stripMarkdownFence(replacement));
+  if (!clean || !new RegExp(`\\b${region.name}\\b`).test(clean)) return null;
+  return `${moduleCode.slice(0, region.start)}${clean}${moduleCode.slice(region.end)}`;
+}
+
 function sumUsage(usages) {
   return usages.reduce((total, usage) => {
     if (!usage) return total;
@@ -81,6 +175,19 @@ function findSyntaxError(code) {
     return null;
   } catch (error) {
     return error.message;
+  }
+}
+
+function findSyntaxLine(code) {
+  const stripped = String(code || "")
+    .replace(/^\s*import\s+["'][^"']*["'];?\s*$/gm, "")
+    .replace(/^\s*import\s+[^;\n]*from\s+["'][^"']*["'];?\s*$/gm, "");
+  try {
+    new vm.Script(stripped, { filename: "generated-game.js" });
+    return null;
+  } catch (error) {
+    const match = String(error?.stack || "").match(/generated-game\.js:(\d+)/);
+    return match ? Number(match[1]) : null;
   }
 }
 
@@ -164,12 +271,12 @@ async function generateWithModel(promptBundle, model, onProgress, models = zeroG
       "Return only executable JavaScript source without markdown fences.",
       "The script must select the <canvas id=\"game\"> element, get the 2D rendering context, and implement the complete game state, loop, input handling, and canvas rendering.",
       "It must run immediately when imported in a Vite project.",
-      "Do not access external resources or libraries. Handle game restart (KeyR) and resize correctly."
+      "Do not access resources other than the supplied gameplay asset manifest, and do not use external libraries. Handle game restart (KeyR) and resize correctly."
     ].join("\n"),
     user: promptBundle.user
   });
 
-  let generatedCode = stripModuleExports(stripMarkdownFence(response.content));
+  let generatedCode = attachValidatedRuntimeShell(stripModuleExports(stripMarkdownFence(response.content)));
   const usages = [response.usage];
   const stages = {
     unifiedGeneration: { model: response.model, usage: response.usage }
@@ -181,7 +288,7 @@ async function generateWithModel(promptBundle, model, onProgress, models = zeroG
   const missing = missingRuntimeFeatures(generatedCode);
   if (missing.length > 0) {
     const repair = await callCodingStage({
-      model: models.background,
+      model: models.repair || models.coding,
       maxTokens: SCRATCH_MAX_TOKENS,
       onChunk: (chars) => onProgress?.({ stage: "repairing", chars }),
       system: [
@@ -194,9 +301,9 @@ async function generateWithModel(promptBundle, model, onProgress, models = zeroG
       ].join("\n"),
       user: [promptBundle.user, "\nINCOMPLETE MODULE:\n", generatedCode].join("\n")
     });
-    const repairedCode = stripModuleExports(stripMarkdownFence(repair.content));
+    const repairedCode = attachValidatedRuntimeShell(stripModuleExports(stripMarkdownFence(repair.content)));
     usages.push(repair.usage);
-    stages.repair = { model: models.background, usage: repair.usage };
+    stages.repair = { model: models.repair || models.coding, usage: repair.usage };
     // Only adopt the repair when it actually closes gaps.
     if (missingRuntimeFeatures(repairedCode).length < missing.length) {
       generatedCode = repairedCode;
@@ -253,7 +360,7 @@ async function repairEditedModule(code, promptBundle, gamePackage, onProgress, m
     // let the caller ship the edit rather than burning more time/tokens.
     if (!hard && attempt > 1) break;
     const repair = await callCodingStage({
-      model: attempt === 1 ? models.background : models.coding,
+      model: models.repair || models.coding,
       maxTokens: 16384,
       onChunk: (chars) => onProgress?.({ stage: "repairing", chars }),
       system: [
@@ -265,7 +372,7 @@ async function repairEditedModule(code, promptBundle, gamePackage, onProgress, m
       user: [promptBundle.user, "\nMODULE TO FIX (repair in place, keep its behavior):\n", current].join("\n")
     });
     usages.push(repair.usage);
-    current = stripModuleExports(stripMarkdownFence(repair.content));
+    current = attachValidatedRuntimeShell(stripModuleExports(stripMarkdownFence(repair.content)));
   }
   return { code: current, ok: !moduleProblem(current, gamePackage), usage: sumUsage(usages) };
 }
@@ -291,7 +398,7 @@ async function generateFromSeed(promptBundle, seedCode, model, onProgress, gameP
     ].join("\n"),
     user: [promptBundle.user, "\nREFERENCE MODULE (edit this, keep its structure):\n", seedCode].join("\n")
   });
-  let generatedCode = stripModuleExports(stripMarkdownFence(integration.content));
+  let generatedCode = attachValidatedRuntimeShell(stripModuleExports(stripMarkdownFence(integration.content)));
   const usages = [integration.usage];
 
   // Repair in place if anything looks wrong — never regenerate from scratch.
@@ -299,7 +406,9 @@ async function generateFromSeed(promptBundle, seedCode, model, onProgress, gameP
     const repaired = await repairEditedModule(generatedCode, promptBundle, gamePackage, onProgress, 3, models);
     usages.push(repaired.usage);
     // Keep the repaired code as long as it isn't WORSE than where we started.
-    if (!hardBrokenReason(repaired.code, gamePackage) || repaired.ok) generatedCode = repaired.code;
+    if (!hardBrokenReason(repaired.code, gamePackage) || repaired.ok) {
+      generatedCode = attachValidatedRuntimeShell(repaired.code);
+    }
   }
 
   // Only revert to the previous build when the edit definitely won't run for
@@ -354,24 +463,38 @@ async function ensureValidSyntax(generated, promptBundle, reference, onProgress,
   if (!syntaxError) return generated;
 
   try {
+    const syntaxLine = findSyntaxLine(generated.generatedCode);
+    const region = functionRegionAtLine(generated.generatedCode, syntaxLine);
     const repair = await callCodingStage({
-      model: models.background,
-      maxTokens: 16384,
+      model: models.repair || models.coding,
+      maxTokens: region ? 5000 : 16384,
       onChunk: (chars) => onProgress?.({ stage: "fixing-syntax", chars }),
       system: [
         promptBundle.system,
-        "The module below fails to parse. Fix the syntax error and return the complete corrected module, nothing else.",
-        `SyntaxError: ${syntaxError}`
+        region
+          ? `Repair only the complete function named ${region.name}. Return that one complete corrected function and nothing else.`
+          : "The module below fails to parse. Return the complete corrected module and nothing else.",
+        `SyntaxError: ${syntaxError}`,
+        ...(syntaxLine ? [`Failing generated module line: ${syntaxLine}`] : [])
       ].join("\n"),
-      user: [promptBundle.user, "\nBROKEN MODULE:\n", generated.generatedCode].join("\n")
+      user: [
+        promptBundle.user,
+        region ? `\nBROKEN FUNCTION ${region.name}:\n` : "\nBROKEN MODULE:\n",
+        region?.code ?? generated.generatedCode
+      ].join("\n")
     });
-    const fixed = stripModuleExports(stripMarkdownFence(repair.content));
+    const targeted = region
+      ? replaceFunctionRegion(generated.generatedCode, region, repair.content)
+      : null;
+    const fixed = targeted
+      ? attachValidatedRuntimeShell(targeted)
+      : attachValidatedRuntimeShell(stripModuleExports(stripMarkdownFence(repair.content)));
     if (!findSyntaxError(fixed)) {
       return {
         ...generated,
         generatedCode: fixed,
         usage: sumUsage([generated.usage, repair.usage]),
-        stages: { ...generated.stages, syntaxRepair: { model: models.background, usage: repair.usage } }
+        stages: { ...generated.stages, syntaxRepair: { model: models.repair || models.coding, usage: repair.usage } }
       };
     }
     syntaxError = findSyntaxError(fixed) ?? syntaxError;
@@ -405,26 +528,39 @@ async function ensureRuntimeRuns(generated, promptBundle, gamePackage, reference
   if (result.ok) return generated;
 
   try {
+    const region = functionRegionAtLine(generated.generatedCode, result.line);
     const repair = await callCodingStage({
-      model: models.background,
-      maxTokens: 16384,
+      model: models.repair || models.coding,
+      maxTokens: region ? 5000 : 16384,
       onChunk: (chars) => onProgress?.({ stage: "fixing-runtime", chars }),
       system: [
         promptBundle.system,
-        "The module below PARSES but throws a runtime error the moment it runs, so the game shows a blank/error screen.",
-        "Find the cause and return the complete corrected module, nothing else — keep the gameplay the same.",
+        region
+          ? `Repair only the complete function named ${region.name}. Return that one complete corrected function and nothing else.`
+          : "The module below PARSES but throws a runtime error. Return the complete corrected module and nothing else.",
+        "Keep all working gameplay behavior unchanged.",
         `Runtime error: ${result.error}`,
+        ...(result.line ? [`Failing generated module line: ${result.line}`] : []),
         "Common causes: indexing into an array/object that was never initialised (e.g. board[r][c] before board[r] exists), reading a property of a variable that is still undefined, or using an element/context before it is assigned."
       ].join("\n"),
-      user: [promptBundle.user, "\nBROKEN MODULE:\n", generated.generatedCode].join("\n")
+      user: [
+        promptBundle.user,
+        region ? `\nBROKEN FUNCTION ${region.name}:\n` : "\nBROKEN MODULE:\n",
+        region?.code ?? generated.generatedCode
+      ].join("\n")
     });
-    const fixed = stripModuleExports(stripMarkdownFence(repair.content));
+    const targeted = region
+      ? replaceFunctionRegion(generated.generatedCode, region, repair.content)
+      : null;
+    const fixed = targeted
+      ? attachValidatedRuntimeShell(targeted)
+      : attachValidatedRuntimeShell(stripModuleExports(stripMarkdownFence(repair.content)));
     if (!findSyntaxError(fixed) && runtimeSmokeTest(fixed, gamePackage).ok) {
       return {
         ...generated,
         generatedCode: fixed,
         usage: sumUsage([generated.usage, repair.usage]),
-        stages: { ...generated.stages, runtimeRepair: { model: models.background, usage: repair.usage } }
+        stages: { ...generated.stages, runtimeRepair: { model: models.repair || models.coding, usage: repair.usage } }
       };
     }
     result = runtimeSmokeTest(fixed, gamePackage).ok ? { ok: true } : result;
@@ -522,7 +658,7 @@ export async function createRefinementBundle(
       syntaxOk ? "Syntax validates" : "Syntax check FAILED",
       "Runs immediately in browser",
       "Pointer and keyboard input works",
-      "No external images",
+      gamePackage.gameplayAssets?.manifest ? "Generated gameplay assets integrated" : "No external images",
       "Performance target is 60 FPS"
     ]
   };

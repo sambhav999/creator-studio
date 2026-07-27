@@ -5,6 +5,11 @@ import {
   updateGamePackageFields
 } from "../services/databaseService.js";
 import { getJob, serializeJob, startJob } from "../services/jobService.js";
+import { generateAndStoreGameThumbnail } from "../services/thumbnailService.js";
+import {
+  gameplayAssetManifest,
+  generateGameplayAssets
+} from "../services/gameplayAssetService.js";
 import { createRefinementBundle } from "../services/refinementService.js";
 import { assertGenerationAccess, assertEditAccess, generationAccessMetadata } from "../services/generationAccessService.js";
 import { recordPaymentReceipt, recordGameVersion, recordReferenceInput, recordVoiceInput } from "../services/zeroGProvenanceService.js";
@@ -22,12 +27,17 @@ import {
   getEditingModelsForTier,
   getEditingStrategy,
   normalizeTier,
-  zeroGModels
+  zeroGModels,
+  callZeroGChat
 } from "../services/zeroGService.js";
 
 const orchestrationSchema = z.object({
   prompt: z.string().min(1),
   context: z.record(z.any()).optional()
+}).strict();
+
+const promptEnhancementSchema = z.object({
+  prompt: z.string().trim().min(3).max(20000)
 }).strict();
 
 const codeSchema = z.object({
@@ -73,6 +83,53 @@ const speechSchema = z.object({
   language: z.string().optional()
 }).strict();
 
+function titleFromDetailedPrompt(prompt, fallback = "Custom AI Game") {
+  const markdownTitle = String(prompt || "").match(/^##\s*Title\s*\n\s*\*\*([^*\n]+)\*\*/i)?.[1]?.trim();
+  return markdownTitle || fallback;
+}
+
+function fallbackGameTitle(prompt) {
+  const text = String(prompt || "");
+  const existing = text.match(/^##\s*Title\s*\n\s*\*\*([^*\n]+)\*\*/i)?.[1]?.trim();
+  if (existing) return existing;
+  if (/snowboard|mountain|slope|carv(?:e|ing)/i.test(text)) return "Infinite Alpine Flow";
+  if (/football|soccer|world cup/i.test(text)) return "Pocket Football Rush";
+  if (/chess|checkmate/i.test(text)) return "Neon Checkmate";
+  if (/racing|racer|driv(?:e|ing)|car\b/i.test(text)) return "Velocity Rush";
+  const words = text
+    .replace(/\b(build|create|make|generate|me|a|an|the|game|please)\b/gi, " ")
+    .replace(/[^a-zA-Z0-9\s-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ")
+    .slice(0, 5);
+  return words.length
+    ? words.map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(" ")
+    : "Custom AI Game";
+}
+
+function fallbackEnhancedPrompt(rawPrompt) {
+  const withoutExistingTitle = String(rawPrompt)
+    .replace(/^##\s*Title\s*\n\s*\*\*[^*\n]+\*\*\s*/i, "")
+    .trim();
+  const wordCount = withoutExistingTitle.split(/\s+/).filter(Boolean).length;
+  const supportingDetail = wordCount < 110
+    ? [
+        "Make the core interaction immediately understandable and fully playable on desktop and mobile.",
+        "Use responsive touch and keyboard controls, clear visual feedback, polished animation, layered sound effects, and lightweight original music.",
+        "Build a satisfying gameplay loop with gradual progression, fair challenge, readable objectives, stable performance, and explicit success, failure, restart, and pause states.",
+        "Keep every mechanic, environment, character, interface element, and generated asset consistent with the requested genre and theme."
+      ].join(" ")
+    : "";
+  return [
+    "## Title",
+    `**${fallbackGameTitle(rawPrompt)}**`,
+    "",
+    withoutExistingTitle,
+    supportingDetail
+  ].filter(Boolean).join("\n\n");
+}
+
 export function getAgentStack(_request, response) {
   response.json(getZeroGConfig());
 }
@@ -82,6 +139,71 @@ export async function orchestrate(request, response, next) {
     const input = orchestrationSchema.parse(request.body);
     const result = await createOrchestrationPlan(input);
     response.json({ task: "orchestration", result });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function enhancePrompt(request, response, next) {
+  try {
+    const { prompt } = promptEnhancementSchema.parse(request.body);
+    const model = process.env.PROMPT_ENHANCEMENT || process.env.prompt_enhancement || "MiniMax-M3";
+    let result = null;
+    try {
+      result = await callZeroGChat({
+        model,
+        temperature: 0.45,
+        // MiniMax-M3 emits a hidden reasoning block before the answer. Leave
+        // enough room for that block plus the requested ~150-word prompt.
+        maxTokens: 1400,
+        timeoutMs: 90000,
+        retries: 1,
+        messages: [
+          {
+            role: "system",
+            content: [
+              "You expand a raw game idea into a build-ready specification.",
+              "Read and preserve the complete user prompt even when it is long and already detailed.",
+              "The first two lines must use exactly this format:",
+              "## Title",
+              "**A concise original game title**",
+              "After the title, write approximately 150 words of detailed game specification.",
+              "Preserve the user's intended game name, genre, characters, theme, and core mechanic.",
+              "Add concrete controls, gameplay loop, scoring, progression, challenge, visual style, sound, responsive mobile layout, and win/lose conditions.",
+              "Do not change the requested game into a different genre or reuse an unrelated template.",
+              "Apart from the required Title heading, do not add headings, bullet points, commentary, quotation marks, or implementation code.",
+              "Return only the enhanced prompt."
+            ].join("\n")
+          },
+          { role: "user", content: prompt }
+        ]
+      });
+    } catch (error) {
+      console.warn("Prompt enhancement model failed; preserving the raw prompt", {
+        model,
+        message: error.message
+      });
+    }
+    const cleanedPrompt = (result?.content ?? "")
+      .replace(/<think>[\s\S]*?<\/think>/gi, "")
+      .replace(/<think>[\s\S]*$/gi, "")
+      .replace(/^\s*(?:\*\*)?enhanced game specification:?(?:\*\*)?\s*/i, "")
+      .trim()
+      .replace(/^["']|["']$/g, "");
+    const description = cleanedPrompt
+      .replace(/^##\s*Title\s*$/im, "")
+      .replace(/^\s*\*\*[^*\n]+\*\*\s*$/m, "")
+      .trim();
+    const hasTitle = /^##\s*Title\s*\n\s*\*\*[^*\n]+\*\*/i.test(cleanedPrompt);
+    const enhancedPrompt =
+      hasTitle && description.length >= 80 && !/<\/?think>/i.test(cleanedPrompt)
+        ? cleanedPrompt
+        : fallbackEnhancedPrompt(prompt);
+    response.json({
+      rawPrompt: prompt,
+      enhancedPrompt,
+      model: result?.model ?? "deterministic-fallback"
+    });
   } catch (error) {
     next(error);
   }
@@ -149,13 +271,96 @@ export async function generateCode(request, response, next) {
       });
       logActivityOnChain(ACTIVITY.PAYMENT, input.gamePackage?.id ?? "generation");
     }
+
+    // A tier click starts cover generation immediately, in parallel with code.
+    // The editable detailed prompt is the source of truth for both the game
+    // title and the cover art direction. Fast Hybrid paths may not have created
+    // a DB record yet, so persist a hidden "building" record first.
+    if (!isEdit && input.gamePackage?.id) {
+      const title = titleFromDetailedPrompt(input.request, input.gamePackage.title);
+      const thumbnailGame = {
+        ...input.gamePackage,
+        title,
+        creatorId,
+        buildStatus: "building",
+        generation: {
+          ...(input.gamePackage.generation ?? {}),
+          prompt: input.request ?? input.gamePackage.generation?.prompt ?? ""
+        },
+        publish: {
+          ...(input.gamePackage.publish ?? {}),
+          published: false,
+          status: "draft"
+        }
+      };
+      if (!existingGame) {
+        await saveGamePackage(thumbnailGame);
+      } else {
+        await updateGamePackageFields(input.gamePackage.id, {
+          title,
+          buildStatus: "building",
+          "generation.prompt": thumbnailGame.generation.prompt
+        });
+      }
+      if (!input.gamePackage.thumbnailJobId && !existingGame?.thumbnailUrl) {
+        const thumbnailJob = startJob("thumbnail-generation", () =>
+          generateAndStoreGameThumbnail(thumbnailGame)
+        );
+        input.gamePackage.thumbnailJobId = thumbnailJob.id;
+        input.gamePackage.title = title;
+        input.gamePackage.generation = thumbnailGame.generation;
+        await updateGamePackageFields(input.gamePackage.id, {
+          thumbnailJobId: thumbnailJob.id
+        });
+      }
+    }
     // 0G on-chain: an edit action (fresh builds are logged as GAME_GENERATED in gameController).
     if (isEdit) logActivityOnChain(ACTIVITY.GAME_EDITED, input.gamePackage?.id ?? "");
     const job = startJob("code-generation", async (updateProgress) => {
-      const refinement = await createRefinementBundle(
-        { ...input, strategy, models },
-        { onProgress: updateProgress }
-      );
+      let refinement;
+      let gameplayAssets;
+      try {
+        if (!isEdit) {
+          const assetGame = {
+            ...input.gamePackage,
+            generation: {
+              ...(input.gamePackage.generation ?? {}),
+              prompt: input.request ?? input.gamePackage.generation?.prompt ?? ""
+            }
+          };
+          const manifest = gameplayAssetManifest(assetGame);
+          const gamePackageWithAssets = {
+            ...assetGame,
+            gameplayAssets: { status: "generating", manifest }
+          };
+          [refinement, gameplayAssets] = await Promise.all([
+            createRefinementBundle(
+              { ...input, gamePackage: gamePackageWithAssets, strategy, models },
+              { onProgress: updateProgress }
+            ),
+            generateGameplayAssets(assetGame, updateProgress)
+          ]);
+          const usesGeneratedAssets =
+            /drawImage\s*\(/.test(refinement?.generatedCode ?? "") &&
+            /gameplayAssets/.test(refinement?.generatedCode ?? "");
+          if (!usesGeneratedAssets) {
+            throw new Error("Generated code did not integrate the gameplay asset manifest");
+          }
+        } else {
+          refinement = await createRefinementBundle(
+            { ...input, strategy, models },
+            { onProgress: updateProgress }
+          );
+        }
+      } catch (error) {
+        if (input.gamePackage?.id) {
+          await updateGamePackageFields(input.gamePackage.id, {
+            buildStatus: "failed",
+            buildError: error.message
+          }).catch(() => null);
+        }
+        throw error;
+      }
       // 0G: record this build/edit as an immutable game version.
       recordGameVersion({ game: input.gamePackage, refinement, kind: isEdit ? "edit" : "build" });
       // Persist the build onto the saved game: without this, the generated
@@ -171,7 +376,11 @@ export async function generateCode(request, response, next) {
             if (stored) {
               await updateGamePackageFields(input.gamePackage.id, {
                 tier: "ai-refinement",
-                refinement
+                refinement,
+                ...(gameplayAssets ? { gameplayAssets } : {}),
+                buildStatus: refinement?.generatedCode || strategy !== "pure-agent"
+                  ? "ready"
+                  : "failed"
               });
             } else {
               // A confident local template match skips the initial prompt
@@ -182,6 +391,10 @@ export async function generateCode(request, response, next) {
                 creatorId,
                 tier: "ai-refinement",
                 refinement,
+                ...(gameplayAssets ? { gameplayAssets } : {}),
+                buildStatus: refinement?.generatedCode || strategy !== "pure-agent"
+                  ? "ready"
+                  : "failed",
                 generationAccess: generationAccess
                   ? generationAccessMetadata(generationAccess)
                   : input.gamePackage.generationAccess,
@@ -197,7 +410,7 @@ export async function generateCode(request, response, next) {
           console.warn("Could not persist refinement to database", { message: error.message });
         }
       }
-      return refinement;
+      return gameplayAssets ? { ...refinement, gameplayAssets } : refinement;
     });
     response.status(202).json({ task: "code-generation", ...serializeJob(job) });
   } catch (error) {
