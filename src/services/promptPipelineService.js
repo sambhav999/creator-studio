@@ -1,6 +1,7 @@
 import { templates, themePresets } from "../data/templates.js";
 import { createGamePackage } from "./gameFactoryService.js";
 import { createRefinementBundle } from "./refinementService.js";
+import { createGenerationLogger } from "../utils/generationLogger.js";
 import { createOrchestrationPlan, generateImageAsset, runBackgroundTask, getModelsForTier, getTierStrategy, normalizeTier, zeroGModels } from "./zeroGService.js";
 import { nanoid } from "nanoid";
 
@@ -93,7 +94,13 @@ function normalizeSelection(selection, prompt) {
 
 // One background call does both routing and variation design — the previous
 // two sequential round-trips added 20-40s of latency and a second failure point.
-async function routeAndVaryWithAgent({ prompt, context, generationId, models = zeroGModels }) {
+async function routeAndVaryWithAgent({
+  prompt,
+  context,
+  generationId,
+  models = zeroGModels,
+  timeoutMs = 10 * 60 * 1000,
+}) {
   const localRecommendation = localTemplateSelection(prompt);
   const templateSummaries = templates.map(template => ({
     id: template.id,
@@ -130,7 +137,8 @@ async function routeAndVaryWithAgent({ prompt, context, generationId, models = z
       instruction:
         "Avoid titles, color palettes, tuning combinations, obstacle patterns, scoring rules, and thumbnail compositions used by recentCreations."
     },
-    models
+    models,
+    timeoutMs,
   });
 
   const parsed = extractJsonObject(result.content) ?? {};
@@ -222,14 +230,20 @@ function createFallbackThumbnail(game, generationId) {
   return `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`;
 }
 
-async function generateSpecsWithAgent(prompt, context, models = zeroGModels) {
+async function generateSpecsWithAgent(
+  prompt,
+  context,
+  models = zeroGModels,
+  timeoutMs = 10 * 60 * 1000,
+) {
   const result = await runBackgroundTask({
     task: "Design complete custom browser game specifications from scratch based on the user prompt. Do NOT use templates. Decide the title, category, mechanic, controls, tuning (parameters object), mood, colors (array of hex colors), assets. Return ONLY a JSON object containing: title, category, mechanic, controls, tuning, mood, colors, assets.",
     input: {
       prompt,
       context: context ?? null
     },
-    models
+    models,
+    timeoutMs,
   });
 
   const parsed = extractJsonObject(result.content);
@@ -259,13 +273,32 @@ export async function generateGameFromPrompt({
   includeCode = true,
   includeAssets = true,
   strategy = "hybrid",
-  tier
+  tier,
+  requestId: requestIdInput,
 }) {
+  const requestId =
+    requestIdInput ??
+    `gen_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const logger = createGenerationLogger(requestId);
   const warnings = [];
   const generationId = nanoid(16);
   let routing = null;
   let selection = null;
   let game = null;
+  const isFastRoutingOnly = !includePlan && !includeCode && !includeAssets;
+  const routingTimeoutMs = isFastRoutingOnly ? 75_000 : 10 * 60 * 1000;
+
+  logger.log("pipeline.start", {
+    tier,
+    strategy,
+    includePlan,
+    includeCode,
+    includeAssets,
+    isFastRoutingOnly,
+    routingTimeoutMs,
+    promptLength: prompt?.length ?? 0,
+    preferredTemplateId: context?.preferredTemplateId ?? null,
+  });
 
   // The tier OWNS both the model set and the strategy — the client-sent
   // `strategy` is ignored so a free/Tier-1 request can't force a premium
@@ -274,14 +307,21 @@ export async function generateGameFromPrompt({
   if (!resolvedTier) {
     const error = new Error("A tier (1, 2, or 3) is required to generate a game.");
     error.status = 400;
+    logger.fail("pipeline.invalid-tier", error);
     throw error;
   }
   const models = getModelsForTier(resolvedTier);
   strategy = getTierStrategy(resolvedTier);
+  logger.log("pipeline.tier-resolved", { resolvedTier, strategy, models });
 
   if (strategy === "pure-agent") {
     try {
-      const design = await generateSpecsWithAgent(prompt, context, models);
+      logger.log("pipeline.pure-agent-specs.start", { routingTimeoutMs });
+      const design = await generateSpecsWithAgent(prompt, context, models, routingTimeoutMs);
+      logger.log("pipeline.pure-agent-specs.done", {
+        model: design.agent?.model ?? null,
+        title: design.specs?.title ?? null,
+      });
       const specs = design.specs;
       
       game = {
@@ -348,6 +388,7 @@ export async function generateGameFromPrompt({
       };
       selection = routing.selection;
     } catch (error) {
+      logger.fail("pipeline.pure-agent-specs.failed", error);
       warnings.push(`Pure agent generation failed, falling back to hybrid: ${error.message}`);
       strategy = "hybrid";
     }
@@ -356,10 +397,23 @@ export async function generateGameFromPrompt({
   if (strategy !== "pure-agent") {
     let rawVariation = null;
     try {
-      routing = await routeAndVaryWithAgent({ prompt, context, generationId, models });
+      logger.log("pipeline.routing.start", { routingTimeoutMs });
+      routing = await routeAndVaryWithAgent({
+        prompt,
+        context,
+        generationId,
+        models,
+        timeoutMs: routingTimeoutMs,
+      });
       selection = routing.selection;
       rawVariation = routing.rawVariation;
+      logger.log("pipeline.routing.done", {
+        templateId: selection?.templateId ?? null,
+        model: routing?.agent?.model ?? null,
+        reason: selection?.reason ?? null,
+      });
     } catch (error) {
+      logger.fail("pipeline.routing.failed", error);
       warnings.push(`Background routing fallback: ${error.message}`);
       selection = normalizeSelection(
         {
@@ -485,6 +539,18 @@ export async function generateGameFromPrompt({
     assetsPromise
   ]);
 
+  logger.log("pipeline.parallel-agents.settled", {
+    includePlan,
+    includeCode,
+    includeAssets,
+    plan: planPromise ? planResult.status : "skipped",
+    code: codePromise ? codeResult.status : "skipped",
+    assets: assetsPromise ? assetsResult.status : "skipped",
+    planError: planResult.status === "rejected" ? planResult.reason?.message : null,
+    codeError: codeResult.status === "rejected" ? codeResult.reason?.message : null,
+    assetsError: assetsResult.status === "rejected" ? assetsResult.reason?.message : null,
+  });
+
   if (includePlan && !pureAgentPlan) {
     if (planResult.status === "fulfilled") {
       plan = planResult.value;
@@ -520,6 +586,14 @@ export async function generateGameFromPrompt({
   if (!game.thumbnailUrl) {
     game.thumbnailUrl = createFallbackThumbnail(game, generationId);
   }
+
+  logger.done({
+    gameId: game.id,
+    templateId: game.templateId,
+    strategy,
+    warningCount: warnings.length,
+    warnings,
+  });
 
   return {
     game,

@@ -377,6 +377,14 @@ export async function generateCode(request, response, next) {
       }
       return refinement;
     });
+    console.info("[agents/code] job.queued", {
+      jobId: job.id,
+      gameId: input.gamePackage?.id ?? null,
+      tier: isEdit ? (normalizeTier(input.tier ?? input.gamePackage?.generation?.qualityTier) ?? 1) : normalizeTier(input.tier),
+      strategy,
+      isEdit,
+      requestLength: input.request?.length ?? 0,
+    });
     response.status(202).json({ task: "code-generation", ...serializeJob(job) });
   } catch (error) {
     next(error);
