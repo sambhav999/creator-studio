@@ -69,7 +69,8 @@ function buildPromptBundle({ gamePackage, request, plan, premium = false }) {
       "Use the existing <canvas id=\"game\"> element and make keyboard plus pointer input work.",
       "FILL THE SCREEN: the game runs in a tall, narrow portrait frame. Set canvas.width = window.innerWidth and canvas.height = window.innerHeight at startup AND on every 'resize' event — never hardcode 960x540 or any fixed size. Position and scale EVERYTHING (board, player, obstacles, HUD) relative to the current canvas.width/height so the playfield always fills the whole frame with no big empty margins. For a square board, make it as large as the smaller dimension allows and center it.",
       "The game MUST be fully playable on a touch phone with no keyboard: handle touchstart/touchend (and pointer events) on the canvas so swipes steer/move and taps perform the main action; never make a physical key the ONLY way to play.",
-      "Restart MUST work by tapping or clicking the canvas after game over, in addition to any key (do not rely on 'Press R' alone).",
+      "Restart MUST fully reset ALL game state to a fresh start (score, player, entities, timers, spawn queues, flags, the game-over/win state) and MUST trigger ONLY on an explicit tap/click/keypress after game over. The game must NEVER auto-restart, loop back, or reset itself on its own — a game that keeps restarting by itself is a critical failure.",
+      "Every control, button, and mechanic must be fully wired and actually work — no dead buttons, no half-implemented inputs. The game must not throw any uncaught runtime error while loading or playing.",
       "Import the game package with: import { gamePackage } from \"./gamePackage.js\";",
       "Import styles with: import \"./styles.css\";",
       "Do not use export statements anywhere in the module.",
@@ -293,12 +294,12 @@ function missingRequiredFeatures(code, premium) {
   ];
 }
 
-// From-scratch generation is capped at ~15,000 characters of code: generation
+// From-scratch generation is capped at ~18,000 characters of code: generation
 // time scales linearly with output length, and the cap keeps a pure-agent
-// build inside a single response (no slow continuation round). 15K chars is
-// ~4.5K tokens; the 6144 ceiling leaves headroom without allowing 16K-token runs.
-const SCRATCH_CHAR_TARGET = 15000;
-const SCRATCH_MAX_TOKENS = 6144;
+// build inside a single response (no slow continuation round). 18K chars is
+// ~5.4K tokens; the 7168 ceiling leaves headroom without allowing 16K-token runs.
+const SCRATCH_CHAR_TARGET = 18000;
+const SCRATCH_MAX_TOKENS = 7168;
 
 async function generateWithModel(promptBundle, model, onProgress, models = zeroGModels) {
   // Single-stage unified code generation for maximum speed
@@ -308,14 +309,19 @@ async function generateWithModel(promptBundle, model, onProgress, models = zeroG
     onChunk: (chars) => onProgress?.({ stage: "writing-code", chars }),
     system: [
       promptBundle.system,
-      "You are implementing a complete browser game from scratch in one complete JavaScript module.",
-      "Keep your thinking/reasoning extremely brief and concise to save output tokens.",
-      `Keep the complete module under ${SCRATCH_CHAR_TARGET.toLocaleString("en-US")} characters: favor compact, focused gameplay over decorative extras, and never pad with comments.`,
+      "You are implementing a COMPLETE, fully playable browser game from scratch in one JavaScript module.",
+      "Keep your thinking/reasoning brief to save output tokens.",
+      // Soft length nudge only — correctness always wins over brevity.
+      `Aim to keep the module around ${SCRATCH_CHAR_TARGET.toLocaleString("en-US")} characters, but NEVER omit, stub, shorten, or fake gameplay to hit a length — a complete working game is the only priority. No TODOs, no placeholder functions, no "// add logic here".`,
+      "EVERY feature, control, button, and mechanic you mention or draw MUST be fully implemented and actually work — no dead buttons, no half-wired inputs.",
+      "RESTART must fully reset ALL game state to a fresh start (score, player, entities, timers, flags, game-over state) and must trigger ONLY on an explicit tap/click/keypress after game over — the game must NEVER auto-restart, loop, or reset itself on its own.",
+      "The game MUST NOT throw any uncaught runtime error while loading or playing — guard array/object access, initialize every variable before use, and never read a property of something that could be undefined.",
+      "Before finishing, mentally play one full round (start → play → game over → restart) and make sure nothing breaks and every control responds.",
       "Make the game fill the entire browser viewport: set canvas.width = window.innerWidth and canvas.height = window.innerHeight on startup and on every window resize, and position/scale all gameplay relative to the current canvas size (no fixed 960x540 layouts).",
       "Return only executable JavaScript source without markdown fences.",
       "The script must select the <canvas id=\"game\"> element, get the 2D rendering context, and implement the complete game state, loop, input handling, and canvas rendering.",
       "It must run immediately when imported in a Vite project.",
-      "Do not access resources other than the supplied gameplay asset manifest, and do not use external libraries. Handle game restart (KeyR) and resize correctly."
+      "Do not access resources other than the supplied gameplay asset manifest, and do not use external libraries. Handle game restart (KeyR + tap/click) and resize correctly."
     ].join("\n"),
     user: promptBundle.user
   });
