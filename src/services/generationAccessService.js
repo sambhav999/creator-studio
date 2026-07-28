@@ -214,6 +214,36 @@ export async function assertGenerationAccess({
     };
   }
 
+  // A zero-priced generation tier is always free, regardless of whether the
+  // deployment uses subscriptions or legacy per-generation billing. This must
+  // run before the subscription gate so Hybrid (tier 1, configured as 0 0G /
+  // 0 TON) never asks an existing creator to purchase Creator Plus.
+  const preferredMethod =
+    paymentMethod === "0g" || paymentMethod === "ton"
+      ? paymentMethod
+      : evmWalletAddress
+        ? "0g"
+        : tonWalletAddress
+          ? "ton"
+          : paidGenerationCurrency() === "0G"
+            ? "0g"
+            : "ton";
+  const preferredAmount =
+    preferredMethod === "0g"
+      ? paidGenerationPrice0G(tier)
+      : paidGenerationPriceTON(tier);
+  if (!preferredAmount || preferredAmount <= 0) {
+    return {
+      free: true,
+      currency: preferredMethod === "0g" ? "0G" : "TON",
+      amount: 0,
+      tier: normalizeTier(tier),
+      existingGames,
+      paymentMethod: preferredMethod,
+      zeroPriceTier: true
+    };
+  }
+
   // Subscription billing replaces the legacy pay-per-generation path. Keep the
   // old TON/Stars/0G transaction flow available only when explicitly selected
   // for a rollback during deployment.
@@ -280,19 +310,6 @@ export async function assertGenerationAccess({
   // EVM/0G wallet → 0G). This is the "auto currency by connection" behavior.
   const chosen = paymentMethod === "0g" ? "0g" : paymentMethod === "ton" ? "ton" : methods.chain.method;
   const chosenAmount = chosen === "0g" ? paidGenerationPrice0G(tier) : paidGenerationPriceTON(tier);
-
-  // Zero-priced tier (e.g. Hybrid): no payment and no wallet gate — amount 0 means free.
-  if (!chosenAmount || chosenAmount <= 0) {
-    return {
-      free: false,
-      currency: chosen === "0g" ? "0G" : "TON",
-      amount: 0,
-      tier: paymentRequirement.tier,
-      existingGames,
-      paymentMethod: chosen,
-      zeroPriceTier: true
-    };
-  }
 
   if (!paymentTxHash) {
     throw generationAccessError({ existingGames, tier, methods });

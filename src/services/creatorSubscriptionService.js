@@ -265,7 +265,9 @@ export async function confirmCreatorSubscription({ txHash, wallet, userId }) {
 }
 
 export function minimumSubscriptionTierForGeneration(generationTier) {
-  return Number(generationTier) >= 3
+  const tier = Number(generationTier);
+  if (tier <= 1) return CREATOR_SUBSCRIPTION_TIERS.FREE;
+  return tier >= 3
     ? CREATOR_SUBSCRIPTION_TIERS.PRO
     : CREATOR_SUBSCRIPTION_TIERS.PLUS;
 }

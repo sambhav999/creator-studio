@@ -10,7 +10,7 @@ import {
 test("generation quality tiers remain separate from subscription tiers", () => {
   assert.equal(
     minimumSubscriptionTierForGeneration(1),
-    CREATOR_SUBSCRIPTION_TIERS.PLUS
+    CREATOR_SUBSCRIPTION_TIERS.FREE
   );
   assert.equal(
     minimumSubscriptionTierForGeneration(2),
