@@ -128,7 +128,9 @@ export async function checkGenerationAccess(request, response, next) {
       evmWalletAddress: request.auth?.evmWalletAddress,
       tonWalletAddress: request.auth?.tonWalletAddress,
       paymentTxHash: request.query.paymentTxHash,
-      tier: request.query.tier
+      paymentMethod: request.query.paymentMethod,
+      tier: request.query.tier,
+      auth: request.auth
     });
     response.json({
       ok: true,

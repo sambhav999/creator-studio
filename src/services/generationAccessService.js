@@ -122,21 +122,39 @@ function hasUnlimitedAccess({ creatorId, creatorAliases, evmWalletAddress, tonWa
 
 // Auto-detects which payment methods a user can actually use, from their
 // connected identity: a TON wallet → TON, an EVM wallet → 0G, a Telegram login
-// → Stars. `chain` is the primary on-chain method (TON preferred, else 0G, else
-// the global default) so older clients that read a single method keep working.
-function buildGenerationMethods({ tier, evmWalletAddress, tonWalletAddress, telegramUserId }) {
-  const ton = tonWalletAddress ? { method: "ton", currency: "TON", amount: paidGenerationPriceTON(tier) } : null;
-  const zerog = evmWalletAddress ? { method: "0g", currency: "0G", amount: paidGenerationPrice0G(tier) } : null;
+// → Stars. `chain` is the primary on-chain method unless the client sends
+// paymentMethod (browser → 0g, Telegram mini-app → ton).
+function buildGenerationMethods({
+  tier,
+  evmWalletAddress,
+  tonWalletAddress,
+  telegramUserId,
+  preferredMethod
+}) {
+  const ton = { method: "ton", currency: "TON", amount: paidGenerationPriceTON(tier) };
+  const zerog = { method: "0g", currency: "0G", amount: paidGenerationPrice0G(tier) };
   const starsAmount = generationStarsPrice(tier);
   const stars = (telegramUserId && starsPaymentAvailable() && starsAmount > 0)
     ? { method: "stars", currency: "XTR", amount: starsAmount, available: true }
     : null;
-  let chain = ton ?? zerog;
-  if (!chain) {
+
+  const tonMethod = tonWalletAddress ? ton : null;
+  const zerogMethod = evmWalletAddress ? zerog : null;
+
+  let chain = tonMethod ?? zerogMethod;
+  if (preferredMethod === "0g") chain = zerog;
+  else if (preferredMethod === "ton") chain = ton;
+  else if (!chain) {
     const d = paymentDetails(tier);
     chain = { method: d.currency === "0G" ? "0g" : "ton", currency: d.currency, amount: d.amount };
   }
-  return { chain, ton, "0g": zerog, stars };
+
+  return {
+    chain,
+    ton: tonMethod ?? ton,
+    "0g": zerogMethod ?? zerog,
+    stars
+  };
 }
 
 // 402 advertising exactly the methods this user can pay with.
@@ -228,7 +246,16 @@ export async function assertGenerationAccess({
   }
 
   // Methods this user can actually pay with, auto-detected from their identity.
-  const methods = buildGenerationMethods({ tier, evmWalletAddress, tonWalletAddress, telegramUserId: auth?.telegramUserId });
+  const methods = buildGenerationMethods({
+    tier,
+    evmWalletAddress,
+    tonWalletAddress,
+    telegramUserId: auth?.telegramUserId,
+    preferredMethod:
+      paymentMethod === "0g" || paymentMethod === "ton"
+        ? paymentMethod
+        : undefined
+  });
 
   // Paid path — Stars: consume a prepaid Telegram order.
   if (paymentMethod === "stars" || (starsOrderId && paymentMethod !== "ton" && paymentMethod !== "0g")) {
@@ -253,6 +280,20 @@ export async function assertGenerationAccess({
   // EVM/0G wallet → 0G). This is the "auto currency by connection" behavior.
   const chosen = paymentMethod === "0g" ? "0g" : paymentMethod === "ton" ? "ton" : methods.chain.method;
   const chosenAmount = chosen === "0g" ? paidGenerationPrice0G(tier) : paidGenerationPriceTON(tier);
+
+  // Zero-priced tier (e.g. Hybrid): no payment and no wallet gate — amount 0 means free.
+  if (!chosenAmount || chosenAmount <= 0) {
+    return {
+      free: false,
+      currency: chosen === "0g" ? "0G" : "TON",
+      amount: 0,
+      tier: paymentRequirement.tier,
+      existingGames,
+      paymentMethod: chosen,
+      zeroPriceTier: true
+    };
+  }
+
   if (!paymentTxHash) {
     throw generationAccessError({ existingGames, tier, methods });
   }

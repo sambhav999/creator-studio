@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { enrichAuthPayload } from "../services/authService.js";
 import {
   confirmCreatorSubscription,
   getCreatorSubscription,
@@ -20,7 +21,7 @@ const confirmSchema = z
   .strict();
 
 function authenticatedWallet(request) {
-  const wallet = request.auth?.evmWalletAddress;
+  const wallet = enrichAuthPayload(request.auth ?? {}).evmWalletAddress;
   if (!wallet) {
     const error = new Error("Connect an EVM wallet to manage a Creator subscription");
     error.status = 400;

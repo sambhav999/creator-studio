@@ -2,9 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   derivePrivyUserId,
+  enrichAuthPayload,
   extractPrivyIdentity,
   getPrivyAuthConfig,
-  verifyPrivySession
+  signToken,
+  verifyPrivySession,
+  verifyToken
 } from "../src/services/authService.js";
 
 test("derivePrivyUserId uses the verified EVM wallet as the canonical identity", () => {
@@ -62,6 +65,30 @@ test("extractPrivyIdentity keeps wallets and Telegram as aliases", () => {
     "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd",
     "tg_12345"
   ]);
+});
+
+test("extractPrivyIdentity treats 0x wallets without chain_type as EVM", () => {
+  const identity = extractPrivyIdentity({
+    id: "did:privy:user",
+    linked_accounts: [
+      {
+        type: "wallet",
+        address: "0x5e95aa80893ee0fddfbcd051c042ed8f9814568e"
+      }
+    ]
+  });
+
+  assert.equal(identity.userId, "0x5e95aa80893ee0fddfbcd051c042ed8f9814568e");
+  assert.equal(identity.evmWalletAddress, "0x5e95aa80893ee0fddfbcd051c042ed8f9814568e");
+});
+
+test("enrichAuthPayload backfills evmWalletAddress from userId", () => {
+  const enriched = enrichAuthPayload({
+    userId: "0x5e95aa80893ee0fddfbcd051c042ed8f9814568e",
+    evmWalletAddress: null
+  });
+
+  assert.equal(enriched.evmWalletAddress, "0x5e95aa80893ee0fddfbcd051c042ed8f9814568e");
 });
 
 test("derivePrivyUserId falls back to wallet, Telegram, and access token ids", () => {
@@ -152,5 +179,36 @@ test("verifyPrivySession rejects missing Privy server configuration", async () =
     else process.env.PRIVY_APP_ID = originalAppId;
     if (originalVerificationKey === undefined) delete process.env.PRIVY_VERIFICATION_KEY;
     else process.env.PRIVY_VERIFICATION_KEY = originalVerificationKey;
+  }
+});
+
+test("signToken can re-issue a wallet-linked JWT from a verified token payload", () => {
+  const originalSecret = process.env.JWT_SECRET;
+  process.env.JWT_SECRET = "test-sign-token-secret";
+
+  try {
+    const first = signToken({
+      userId: "did:privy:user",
+      privyUserId: "did:privy:user",
+      evmWalletAddress: null,
+      identityAliases: ["did:privy:user"]
+    });
+    const verified = verifyToken(first);
+    const second = signToken({
+      ...verified,
+      userId: "0x5e95aa80893ee0fddfbcd051c042ed8f9814568e",
+      evmWalletAddress: "0x5e95aa80893ee0fddfbcd051c042ed8f9814568e",
+      identityAliases: ["did:privy:user", "0x5e95aa80893ee0fddfbcd051c042ed8f9814568e"]
+    });
+
+    assert.equal(typeof second, "string");
+    assert.match(second, /^[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+$/);
+    assert.equal(
+      verifyToken(second).evmWalletAddress,
+      "0x5e95aa80893ee0fddfbcd051c042ed8f9814568e"
+    );
+  } finally {
+    if (originalSecret === undefined) delete process.env.JWT_SECRET;
+    else process.env.JWT_SECRET = originalSecret;
   }
 });

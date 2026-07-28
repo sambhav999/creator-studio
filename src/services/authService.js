@@ -73,6 +73,18 @@ function normalizeAddress(address) {
   return /^0x[a-fA-F0-9]{40}$/.test(value) ? value.toLowerCase() : value;
 }
 
+function isEvmAddress(address) {
+  return /^0x[a-fA-F0-9]{40}$/.test(String(address || "").trim());
+}
+
+function findEvmWalletAccount(wallets) {
+  const byChain = wallets.find(
+    (account) => accountChainType(account) === "ethereum" && isEvmAddress(account.address)
+  );
+  if (byChain) return byChain;
+  return wallets.find((account) => isEvmAddress(account.address)) ?? null;
+}
+
 function unique(values) {
   return [...new Set(values.filter(Boolean))];
 }
@@ -81,14 +93,16 @@ export function extractPrivyIdentity(user, fallbackUserId) {
   const accounts = getLinkedAccounts(user);
   const wallets = accounts.filter((account) => account?.type === "wallet" && account.address);
   const tonWallet = wallets.find((account) => accountChainType(account) === "ton");
-  const evmWallet = wallets.find((account) => accountChainType(account) === "ethereum" && account.address);
+  const evmWallet = findEvmWalletAccount(wallets);
   const firstWallet = wallets[0] ?? user?.wallet ?? null;
   const telegram = accounts.find((account) => account?.type === "telegram") ?? user?.telegram ?? null;
   const telegramUserId = telegram?.telegram_user_id ?? telegram?.telegramUserId ?? null;
   const privyUserId = user?.id ?? fallbackUserId ?? null;
-  const evmWalletAddress = normalizeAddress(evmWallet?.address);
-  const tonWalletAddress = normalizeAddress(tonWallet?.address);
   const fallbackWalletAddress = normalizeAddress(firstWallet?.address);
+  const evmWalletAddress =
+    normalizeAddress(evmWallet?.address) ??
+    (isEvmAddress(fallbackWalletAddress) ? fallbackWalletAddress : null);
+  const tonWalletAddress = normalizeAddress(tonWallet?.address);
   const telegramAlias = telegramUserId ? `tg_${telegramUserId}` : null;
 
   return {
@@ -191,9 +205,41 @@ export async function verifyPrivySession({ accessToken, identityToken }) {
   };
 }
 
+function resolveEvmWalletAddress({ evmWalletAddress, userId, identityAliases }) {
+  if (evmWalletAddress) return evmWalletAddress;
+  const userWallet = normalizeAddress(userId);
+  if (userWallet && /^0x[a-fA-F0-9]{40}$/.test(userWallet)) return userWallet;
+  const aliases = Array.isArray(identityAliases) ? identityAliases : [];
+  const fromAlias = aliases
+    .map((value) => normalizeAddress(value))
+    .find((value) => value && /^0x[a-fA-F0-9]{40}$/.test(value));
+  return fromAlias ?? null;
+}
+
+export function enrichAuthPayload(payload = {}) {
+  const evmWalletAddress = resolveEvmWalletAddress(payload);
+  return evmWalletAddress === payload.evmWalletAddress
+    ? payload
+    : { ...payload, evmWalletAddress };
+}
+
+/** Drop JWT metadata so re-signing a verified token does not conflict with expiresIn. */
+function sanitizeTokenPayload(payload = {}) {
+  const {
+    iat,
+    exp,
+    nbf,
+    aud,
+    iss,
+    sub,
+    ...claims
+  } = payload;
+  return claims;
+}
+
 /** Signs a JWT for the given payload (e.g. { userId }). */
 export function signToken(payload) {
-  return jwt.sign(payload, getJwtSecret(), {
+  return jwt.sign(sanitizeTokenPayload(enrichAuthPayload(payload)), getJwtSecret(), {
     expiresIn: `${getExpirationDays()}d`
   });
 }
@@ -226,7 +272,7 @@ export function requireAuth(request, response, next) {
   }
 
   try {
-    request.auth = verifyToken(token);
+    request.auth = enrichAuthPayload(verifyToken(token));
     next();
   } catch (error) {
     response.status(error.status ?? 401).json({ error: error.message });
@@ -247,7 +293,7 @@ export function optionalAuth(request, response, next) {
   }
 
   try {
-    request.auth = verifyToken(token);
+    request.auth = enrichAuthPayload(verifyToken(token));
     next();
   } catch (error) {
     response.status(error.status ?? 401).json({ error: error.message });
