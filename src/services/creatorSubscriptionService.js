@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { ethers } from "ethers";
 import { getDatabase } from "./databaseService.js";
+import { grantSubscriptionGenerationCredits } from "./generationQuotaService.js";
 
 const ABI = JSON.parse(
   readFileSync(new URL("../../contracts/creator-subscription.json", import.meta.url), "utf8")
@@ -257,10 +258,17 @@ export async function confirmCreatorSubscription({ txHash, wallet, userId }) {
     { upsert: true }
   );
 
+  const purchasedTier = Number(parsed.args.tier);
+  const creditGrant =
+    purchasedTier > CREATOR_SUBSCRIPTION_TIERS.FREE
+      ? await grantSubscriptionGenerationCredits(account, purchasedTier)
+      : null;
+
   return {
     txHash: receipt.hash,
     blockNumber: receipt.blockNumber,
-    subscription: await syncCreatorSubscription(account, userId)
+    subscription: await syncCreatorSubscription(account, userId),
+    generationCredits: creditGrant
   };
 }
 

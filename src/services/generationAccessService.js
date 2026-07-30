@@ -5,9 +5,12 @@ import { verifyAndRecordTonGenerationPayment } from "./tonPaymentService.js";
 import { normalizeTier } from "./zeroGService.js";
 import { consumeGenerationStarsOrder, generationStarsPrice, starsPaymentAvailable, consumeEditStarsOrder, editStarsPrice } from "./telegramStarsService.js";
 import {
-  minimumSubscriptionTierForGeneration,
-  requireCreatorSubscription
+  getCreatorSubscription
 } from "./creatorSubscriptionService.js";
+import {
+  evaluateGenerationQuota,
+  getGenerationQuotaStatus
+} from "./generationQuotaService.js";
 
 // Reads a non-negative number from env, else the given fallback.
 function envPrice(name, fallback) {
@@ -204,20 +207,7 @@ export async function assertGenerationAccess({
 
   const ownerIds = Array.isArray(creatorAliases) && creatorAliases.length > 0 ? creatorAliases : creatorId;
   const existingGames = await countCreatedGamePackagesByCreator(ownerIds);
-  if (existingGames < 1) {
-    return {
-      free: true,
-      currency: paymentRequirement.currency,
-      amount: paymentRequirement.amount,
-      tier: paymentRequirement.tier,
-      existingGames
-    };
-  }
 
-  // A zero-priced generation tier is always free, regardless of whether the
-  // deployment uses subscriptions or legacy per-generation billing. This must
-  // run before the subscription gate so Hybrid (tier 1, configured as 0 0G /
-  // 0 TON) never asks an existing creator to purchase Creator Plus.
   const preferredMethod =
     paymentMethod === "0g" || paymentMethod === "ton"
       ? paymentMethod
@@ -232,6 +222,50 @@ export async function assertGenerationAccess({
     preferredMethod === "0g"
       ? paidGenerationPrice0G(tier)
       : paidGenerationPriceTON(tier);
+
+  // Subscription billing replaces the legacy pay-per-generation path. Keep the
+  // old TON/Stars/0G transaction flow available only when explicitly selected
+  // for a rollback during deployment.
+  if (String(process.env.GENERATION_BILLING_MODE || "subscription").toLowerCase() !== "legacy") {
+    const subscriptionState = evmWalletAddress
+      ? await getCreatorSubscription(evmWalletAddress)
+      : null;
+    const quotaDecision = await evaluateGenerationQuota({
+      creatorId,
+      creatorAliases,
+      evmWalletAddress,
+      tier,
+      subscriptionState
+    });
+    return {
+      free: quotaDecision.source === "free",
+      subscription: quotaDecision.source === "credit",
+      currency: "0G",
+      amount: 0,
+      tier: paymentRequirement.tier,
+      existingGames,
+      paymentMethod: quotaDecision.source === "free" ? "free-tier" : "subscription-credit",
+      creatorSubscription: subscriptionState,
+      quota: quotaDecision.quota,
+      quotaSource: quotaDecision.source,
+      quotaCreditKey: quotaDecision.creditKey
+    };
+  }
+
+  if (existingGames < 1) {
+    return {
+      free: true,
+      currency: paymentRequirement.currency,
+      amount: paymentRequirement.amount,
+      tier: paymentRequirement.tier,
+      existingGames
+    };
+  }
+
+  // A zero-priced generation tier is always free, regardless of whether the
+  // deployment uses subscriptions or legacy per-generation billing. This must
+  // run before the subscription gate so Hybrid (tier 1, configured as 0 0G /
+  // 0 TON) never asks an existing creator to purchase Creator Plus.
   if (!preferredAmount || preferredAmount <= 0) {
     return {
       free: true,
@@ -244,36 +278,7 @@ export async function assertGenerationAccess({
     };
   }
 
-  // Subscription billing replaces the legacy pay-per-generation path. Keep the
-  // old TON/Stars/0G transaction flow available only when explicitly selected
-  // for a rollback during deployment.
-  if (String(process.env.GENERATION_BILLING_MODE || "subscription").toLowerCase() !== "legacy") {
-    const requiredTier = minimumSubscriptionTierForGeneration(tier);
-    if (!evmWalletAddress) {
-      const error = new Error("Connect an EVM wallet and subscribe to generate another game.");
-      error.status = 402;
-      error.code = "SUBSCRIPTION_REQUIRED";
-      error.subscription = {
-        required: true,
-        walletRequired: true,
-        requiredTier,
-        requiredTierName: requiredTier === 2 ? "Creator Pro" : "Creator Plus",
-        chainId: 16661
-      };
-      throw error;
-    }
-    const subscription = await requireCreatorSubscription(evmWalletAddress, tier);
-    return {
-      free: false,
-      subscription: true,
-      currency: "0G",
-      amount: 0,
-      tier: paymentRequirement.tier,
-      existingGames,
-      paymentMethod: "subscription",
-      creatorSubscription: subscription
-    };
-  }
+  // Legacy subscription path removed — subscription mode uses generation quotas above.
 
   // Methods this user can actually pay with, auto-detected from their identity.
   const methods = buildGenerationMethods({
@@ -435,9 +440,24 @@ export function generationAccessMetadata(generationAccess) {
     paymentMethod: generationAccess.paymentMethod ?? null,
     subscription: generationAccess.subscription ?? false,
     creatorSubscription: generationAccess.creatorSubscription ?? null,
+    quota: generationAccess.quota ?? null,
+    quotaSource: generationAccess.quotaSource ?? null,
+    quotaCreditKey: generationAccess.quotaCreditKey ?? null,
     starsOrderId: generationAccess.starsOrderId ?? null,
     paymentTxHash: generationAccess.paymentTxHash ?? null,
     payment: generationAccess.payment ?? null,
     existingGamesBeforeCreate: generationAccess.existingGames
   };
+}
+
+export async function fetchGenerationQuotaForAuth({
+  creatorId,
+  creatorAliases,
+  evmWalletAddress
+}) {
+  return getGenerationQuotaStatus({
+    creatorId,
+    creatorAliases,
+    evmWalletAddress
+  });
 }

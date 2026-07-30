@@ -17,7 +17,8 @@ import { logActivity } from "../services/activityService.js";
 import { putBufferOnZeroG } from "../services/zeroGStorage.js";
 import { awardFirstGameBonus, recordCreatorGamePublished } from "../services/pointsService.js";
 import { notifyFollowersOfPublish } from "../services/socialService.js";
-import { assertGenerationAccess, generationAccessMetadata } from "../services/generationAccessService.js";
+import { assertGenerationAccess, generationAccessMetadata, fetchGenerationQuotaForAuth } from "../services/generationAccessService.js";
+import { consumeGenerationQuota } from "../services/generationQuotaService.js";
 import { recordPaymentReceipt, recordGenerationProvenance, recordPublishedSnapshot } from "../services/zeroGProvenanceService.js";
 import { logActivityOnChain, ACTIVITY } from "../services/zeroGActivityLog.js";
 import { createGenerationLogger } from "../utils/generationLogger.js";
@@ -97,6 +98,13 @@ export async function listGames(request, response, next) {
       ids,
       publishedOnly: !creatorId
     });
+    const forReels = String(request.query.forReels ?? "").toLowerCase();
+    if (forReels === "1" || forReels === "true") {
+      for (let i = games.length - 1; i > 0; i -= 1) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [games[i], games[j]] = [games[j], games[i]];
+      }
+    }
     response.json({ games });
   } catch (error) {
     next(error);
@@ -136,6 +144,20 @@ export async function checkGenerationAccess(request, response, next) {
       ok: true,
       access: generationAccessMetadata(generationAccess)
     });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function showGenerationQuota(request, response, next) {
+  try {
+    const creatorId = request.auth?.userId ?? "anonymous";
+    const quota = await fetchGenerationQuotaForAuth({
+      creatorId,
+      creatorAliases: authIdentityAliases(request.auth),
+      evmWalletAddress: request.auth?.evmWalletAddress
+    });
+    response.json({ ok: true, quota });
   } catch (error) {
     next(error);
   }
@@ -461,6 +483,13 @@ export async function generateGame(request, response, next) {
       prompt: input.prompt
     };
     result.game.generationAccess = generationAccessMetadata(generationAccess);
+    if (generationAccess?.quotaCreditKey) {
+      await consumeGenerationQuota({
+        evmWalletAddress: request.auth?.evmWalletAddress,
+        creatorId,
+        creditKey: generationAccess.quotaCreditKey
+      });
+    }
     // 0G provenance: how the game was made + a receipt if it was paid.
     recordGenerationProvenance({ game: result.game });
     recordPaymentReceipt({ creatorId, gameId: result.game.id, tier, access: generationAccess });
