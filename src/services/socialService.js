@@ -262,6 +262,139 @@ export async function deleteComment(commentId, userId) {
   return { deleted: false };
 }
 
+// Comment count for each of the given games. Returns { [gameId]: count }.
+// Used by the creator dashboard to badge each game with its comment total.
+export async function getCommentCountsForGames(gameIds = []) {
+  const ids = [...new Set(gameIds.filter(Boolean))];
+  const counts = {};
+  for (const id of ids) counts[id] = 0;
+  if (!ids.length) return counts;
+  const col = await getCollection(COLLECTIONS.comments);
+  if (col) {
+    const rows = await col
+      .aggregate([
+        { $match: { gameId: { $in: ids } } },
+        { $group: { _id: "$gameId", count: { $sum: 1 } } },
+      ])
+      .toArray();
+    for (const row of rows) counts[row._id] = Number(row.count ?? 0);
+    return counts;
+  }
+  for (const id of ids) counts[id] = (memoryStore.comments.get(id) ?? []).length;
+  return counts;
+}
+
+// Per-game engagement counts (likes, shares, remixes) plus grand totals, for
+// the creator dashboard's Activity tab. Likes and shares are one-doc-per-event
+// keyed by gameId; a remix is a game whose `remixOf` points at one of these.
+export async function getEngagementCountsForGames(gameIds = []) {
+  const ids = [...new Set(gameIds.filter(Boolean))];
+  const byGame = {};
+  for (const id of ids) byGame[id] = { likes: 0, shares: 0, remixes: 0 };
+  const totals = { likes: 0, shares: 0, remixes: 0 };
+  if (!ids.length) return { byGame, totals };
+
+  const [likesCol, sharesCol] = await Promise.all([
+    getCollection(COLLECTIONS.likes),
+    getCollection(COLLECTIONS.shares),
+  ]);
+
+  if (likesCol && sharesCol) {
+    const groupByGame = [
+      { $match: { gameId: { $in: ids } } },
+      { $group: { _id: "$gameId", count: { $sum: 1 } } },
+    ];
+    const gamesCol = await getGameCollection();
+    const [likeRows, shareRows, remixRows] = await Promise.all([
+      likesCol.aggregate(groupByGame).toArray(),
+      sharesCol.aggregate(groupByGame).toArray(),
+      gamesCol
+        .aggregate([
+          { $match: { remixOf: { $in: ids } } },
+          { $group: { _id: "$remixOf", count: { $sum: 1 } } },
+        ])
+        .toArray(),
+    ]);
+    for (const row of likeRows) if (byGame[row._id]) byGame[row._id].likes = Number(row.count ?? 0);
+    for (const row of shareRows) if (byGame[row._id]) byGame[row._id].shares = Number(row.count ?? 0);
+    for (const row of remixRows) if (byGame[row._id]) byGame[row._id].remixes = Number(row.count ?? 0);
+  } else {
+    // In-memory fallback (no Mongo): likes are a Set, shares a running count.
+    for (const id of ids) {
+      byGame[id].likes = (memoryStore.likes.get(id) ?? new Set()).size;
+      byGame[id].shares = memoryStore.shares.get(id) ?? 0;
+    }
+  }
+
+  for (const id of ids) {
+    totals.likes += byGame[id].likes;
+    totals.shares += byGame[id].shares;
+    totals.remixes += byGame[id].remixes;
+  }
+  return { byGame, totals };
+}
+
+// For each game: its up-to-`perGame` newest comments + total comment count.
+// Returns { byGame: { [gameId]: { items: [comment], count } } }.
+export async function getRecentCommentsPerGame(gameIds = [], perGame = 2) {
+  const ids = [...new Set(gameIds.filter(Boolean))];
+  const byGame = {};
+  for (const id of ids) byGame[id] = { items: [], count: 0 };
+  if (!ids.length) return { byGame };
+  const cap = Math.max(1, Math.min(Number(perGame) || 2, 10));
+
+  const col = await getCollection(COLLECTIONS.comments);
+  if (col) {
+    const rows = await col
+      .aggregate([
+        { $match: { gameId: { $in: ids } } },
+        { $sort: { createdAt: -1 } },
+        {
+          $group: {
+            _id: "$gameId",
+            items: { $push: { _id: "$_id", username: "$username", text: "$text", createdAt: "$createdAt", gameId: "$gameId" } },
+            count: { $sum: 1 },
+          },
+        },
+        { $project: { items: { $slice: ["$items", cap] }, count: 1 } },
+      ])
+      .toArray();
+    for (const row of rows) {
+      if (byGame[row._id]) byGame[row._id] = { items: row.items ?? [], count: Number(row.count ?? 0) };
+    }
+    return { byGame };
+  }
+
+  for (const id of ids) {
+    const arr = [...(memoryStore.comments.get(id) ?? [])].reverse();
+    byGame[id] = { items: arr.slice(0, cap), count: arr.length };
+  }
+  return { byGame };
+}
+
+// Most-recent comments across a set of games (newest first), each tagged with
+// its gameId so the dashboard can show "who said what on which game".
+export async function getRecentCommentsForGames(gameIds = [], limit = 50) {
+  const ids = [...new Set(gameIds.filter(Boolean))];
+  if (!ids.length) return [];
+  const capped = Math.max(1, Math.min(Number(limit) || 50, 200));
+  const col = await getCollection(COLLECTIONS.comments);
+  if (col) {
+    return col
+      .find({ gameId: { $in: ids } })
+      .sort({ createdAt: -1 })
+      .limit(capped)
+      .toArray();
+  }
+  const all = [];
+  for (const id of ids) {
+    for (const comment of memoryStore.comments.get(id) ?? []) all.push(comment);
+  }
+  return all
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    .slice(0, capped);
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 //  FAVORITES (Bookmark)
 // ═══════════════════════════════════════════════════════════════════════════

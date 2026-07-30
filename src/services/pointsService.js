@@ -898,6 +898,143 @@ export async function getCreatorScoreSummary(creatorId) {
   return creatorScoreBalances.findOne({ creatorId: normalizedCreatorId }, { projection: { _id: 0 } });
 }
 
+// Creator Score (the platform's earning unit) earned per game, summed from the
+// immutable ledger. `aliases` covers every identity the same creator authed as
+// (privy id, evm/ton wallet, telegram) so earnings aren't split across them.
+// Returns { byGame: { [gameId]: { earned, plays } }, total }.
+export async function getCreatorEarningsByGame(aliases = []) {
+  const ids = [...new Set(aliases.map(normalizeUserId).filter(Boolean))];
+  if (!ids.length) return { byGame: {}, total: 0 };
+  const { creatorScoreLedger } = await collections();
+  const rows = await creatorScoreLedger
+    .aggregate([
+      { $match: { creatorId: { $in: ids } } },
+      {
+        $group: {
+          _id: "$targetGameId",
+          earned: { $sum: "$csDelta" },
+          // A "play" is any qualified-play/completion event on that game.
+          plays: { $sum: { $cond: [{ $in: ["$action", PLAY_ACTIONS] }, 1, 0] } },
+        },
+      },
+    ])
+    .toArray();
+  const byGame = {};
+  let total = 0;
+  for (const row of rows) {
+    if (!row._id) continue;
+    const earned = Number(row.earned ?? 0);
+    byGame[row._id] = { earned, plays: Number(row.plays ?? 0) };
+    total += earned;
+  }
+  return { byGame, total };
+}
+
+// A "play" event, for counting plays out of the mixed creator-score ledger.
+const PLAY_ACTIONS = ["game_play_qualified", "game_complete"];
+
+// Supported analytics ranges → how the time axis is bucketed. `day` is hourly,
+// `week`/`month` are daily, `year` is monthly. `fmt` matches Mongo's
+// $dateToString output so we can align aggregated rows to pre-filled buckets.
+const SERIES_RANGES = {
+  day: { unit: "hour", count: 24, fmt: "%Y-%m-%dT%H" },
+  week: { unit: "day", count: 7, fmt: "%Y-%m-%d" },
+  month: { unit: "day", count: 30, fmt: "%Y-%m-%d" },
+  year: { unit: "month", count: 12, fmt: "%Y-%m" },
+};
+
+const MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+// Bucket key (matching SERIES_RANGES.fmt) + short axis label for a UTC date.
+function seriesKeyLabel(date, unit) {
+  const iso = date.toISOString();
+  if (unit === "hour") return { key: iso.slice(0, 13), label: `${iso.slice(11, 13)}:00` };
+  if (unit === "month") {
+    return { key: iso.slice(0, 7), label: `${MONTH_LABELS[date.getUTCMonth()]} ${iso.slice(2, 4)}` };
+  }
+  return { key: iso.slice(0, 10), label: iso.slice(5, 10) };
+}
+
+// Steps `date` back by one bucket unit (mutating a copy is avoided by callers).
+function stepBack(date, unit, steps) {
+  const next = new Date(date);
+  if (unit === "hour") next.setUTCHours(next.getUTCHours() - steps);
+  else if (unit === "month") next.setUTCMonth(next.getUTCMonth() - steps);
+  else next.setUTCDate(next.getUTCDate() - steps);
+  return next;
+}
+
+// Multi-metric series for the analytics chart, bucketed by the given range
+// ("day" | "week" | "month" | "year"). Each bucket carries: earned (Creator
+// Score), plays (# qualified plays/completions), timeSeconds (total play time
+// from play events) and games (# games created that bucket, from
+// `gameCreatedDates`). Missing buckets are zero-filled so the line is
+// continuous. Returns { range, points: [{ key, label, earned, plays,
+// timeSeconds, games }] } oldest→newest.
+export async function getCreatorSeries(aliases = [], range = "week", gameCreatedDates = []) {
+  const config = SERIES_RANGES[range] ?? SERIES_RANGES.week;
+  const now = new Date();
+  const points = [];
+  const index = new Map();
+  for (let offset = config.count - 1; offset >= 0; offset -= 1) {
+    const date = stepBack(now, config.unit, offset);
+    const { key, label } = seriesKeyLabel(date, config.unit);
+    const point = { key, label, earned: 0, plays: 0, timeSeconds: 0, games: 0 };
+    points.push(point);
+    index.set(key, point);
+  }
+
+  const since = stepBack(now, config.unit, config.count - 1);
+  // Floor the window start to the bucket boundary so nothing is missed.
+  if (config.unit === "hour") since.setUTCMinutes(0, 0, 0);
+  else if (config.unit === "month") since.setUTCDate(1), since.setUTCHours(0, 0, 0, 0);
+  else since.setUTCHours(0, 0, 0, 0);
+
+  // Games created per bucket (dates come from the caller's own game records).
+  for (const raw of gameCreatedDates) {
+    const date = raw instanceof Date ? raw : new Date(raw);
+    if (Number.isNaN(date.getTime()) || date < since) continue;
+    const point = index.get(seriesKeyLabel(date, config.unit).key);
+    if (point) point.games += 1;
+  }
+
+  const ids = [...new Set(aliases.map(normalizeUserId).filter(Boolean))];
+  if (ids.length) {
+    const { creatorScoreLedger } = await collections();
+    const rows = await creatorScoreLedger
+      .aggregate([
+        { $match: { creatorId: { $in: ids }, createdAt: { $gte: since } } },
+        {
+          $group: {
+            _id: { $dateToString: { format: config.fmt, date: "$createdAt", timezone: "UTC" } },
+            earned: { $sum: "$csDelta" },
+            plays: { $sum: { $cond: [{ $in: ["$action", PLAY_ACTIONS] }, 1, 0] } },
+            timeSeconds: {
+              $sum: {
+                $cond: [
+                  { $in: ["$action", PLAY_ACTIONS] },
+                  { $ifNull: ["$metadata.durationSeconds", 0] },
+                  0,
+                ],
+              },
+            },
+          },
+        },
+      ])
+      .toArray();
+    for (const row of rows) {
+      const point = index.get(row._id);
+      if (point) {
+        point.earned = Number(row.earned ?? 0);
+        point.plays = Number(row.plays ?? 0);
+        point.timeSeconds = Number(row.timeSeconds ?? 0);
+      }
+    }
+  }
+
+  return { range: SERIES_RANGES[range] ? range : "week", points };
+}
+
 function displayNameForId(id) {
   const value = String(id || "").trim();
   if (!value) return "Unknown";
