@@ -8,6 +8,8 @@ import {
 import {
   getCreatorEarningsByGame,
   getCreatorSeries,
+  getKultPointsByGame,
+  getKultPointsEarned,
 } from "../services/pointsService.js";
 
 const VALID_RANGES = new Set(["day", "week", "month", "year"]);
@@ -69,7 +71,7 @@ export async function creatorDashboard(request, response, next) {
     if (aliases.length === 0) {
       response.json({
         games: [],
-        totals: { games: 0, plays: 0, comments: 0, likes: 0, shares: 0, remixes: 0, earned: 0 },
+        totals: { games: 0, plays: 0, comments: 0, likes: 0, shares: 0, remixes: 0, earned: 0, kultPoints: 0 },
         series: { range, points: [] },
       });
       return;
@@ -79,11 +81,13 @@ export async function creatorDashboard(request, response, next) {
     const gameIds = rawGames.map((game) => game.id).filter(Boolean);
 
     const gameCreatedDates = rawGames.map((game) => game.createdAt).filter(Boolean);
-    const [commentCounts, engagement, commentPreviews, earnings, series] = await Promise.all([
+    const [commentCounts, engagement, commentPreviews, earnings, kultPoints, kpByGame, series] = await Promise.all([
       getCommentCountsForGames(gameIds),
       getEngagementCountsForGames(gameIds),
       getRecentCommentsPerGame(gameIds, 2),
       getCreatorEarningsByGame(aliases),
+      getKultPointsEarned(aliases),
+      getKultPointsByGame(aliases),
       getCreatorSeries(aliases, range, gameCreatedDates),
     ]);
 
@@ -102,6 +106,7 @@ export async function creatorDashboard(request, response, next) {
           shares: counts.shares,
           remixes: counts.remixes,
           earned: earnings.byGame[game.id]?.earned ?? 0,
+          kpEarned: kpByGame[game.id] ?? 0,
           recentComments: (preview.items ?? []).map(normalizeComment),
         };
       })
@@ -115,6 +120,7 @@ export async function creatorDashboard(request, response, next) {
       shares: engagement.totals.shares,
       remixes: engagement.totals.remixes,
       earned: earnings.total,
+      kultPoints,
     };
 
     response.json({ games, totals, series });

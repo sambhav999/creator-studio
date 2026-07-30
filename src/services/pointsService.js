@@ -930,6 +930,35 @@ export async function getCreatorEarningsByGame(aliases = []) {
   return { byGame, total };
 }
 
+// Lifetime KultPoints (the player economy) earned by the given identity, summed
+// from the immutable KP ledger across all of the user's aliases.
+export async function getKultPointsEarned(aliases = []) {
+  const ids = [...new Set(aliases.map(normalizeUserId).filter(Boolean))];
+  if (!ids.length) return 0;
+  const { playerKpLedger } = await collections();
+  const rows = await playerKpLedger
+    .aggregate([
+      { $match: { userId: { $in: ids } } },
+      { $group: { _id: null, total: { $sum: "$kpDelta" } } },
+    ])
+    .toArray();
+  return Number(rows[0]?.total ?? 0);
+}
+
+// Real KP earned by this user, grouped by the game that awarded it.
+export async function getKultPointsByGame(aliases = []) {
+  const ids = [...new Set(aliases.map(normalizeUserId).filter(Boolean))];
+  if (!ids.length) return {};
+  const { playerKpLedger } = await collections();
+  const rows = await playerKpLedger.aggregate([
+    { $match: { userId: { $in: ids }, targetGameId: { $nin: [null, ""] } } },
+    { $group: { _id: "$targetGameId", earned: { $sum: "$kpDelta" } } },
+  ]).toArray();
+  return Object.fromEntries(
+    rows.filter((row) => row._id).map((row) => [String(row._id), Number(row.earned ?? 0)]),
+  );
+}
+
 // A "play" event, for counting plays out of the mixed creator-score ledger.
 const PLAY_ACTIONS = ["game_play_qualified", "game_complete"];
 
@@ -979,7 +1008,7 @@ export async function getCreatorSeries(aliases = [], range = "week", gameCreated
   for (let offset = config.count - 1; offset >= 0; offset -= 1) {
     const date = stepBack(now, config.unit, offset);
     const { key, label } = seriesKeyLabel(date, config.unit);
-    const point = { key, label, earned: 0, plays: 0, timeSeconds: 0, games: 0 };
+    const point = { key, label, earned: 0, kpEarned: 0, plays: 0, timeSeconds: 0, games: 0 };
     points.push(point);
     index.set(key, point);
   }
@@ -1000,9 +1029,9 @@ export async function getCreatorSeries(aliases = [], range = "week", gameCreated
 
   const ids = [...new Set(aliases.map(normalizeUserId).filter(Boolean))];
   if (ids.length) {
-    const { creatorScoreLedger } = await collections();
-    const rows = await creatorScoreLedger
-      .aggregate([
+    const { creatorScoreLedger, playerKpLedger } = await collections();
+    const [rows, kpRows] = await Promise.all([
+      creatorScoreLedger.aggregate([
         { $match: { creatorId: { $in: ids }, createdAt: { $gte: since } } },
         {
           $group: {
@@ -1020,8 +1049,17 @@ export async function getCreatorSeries(aliases = [], range = "week", gameCreated
             },
           },
         },
-      ])
-      .toArray();
+      ]).toArray(),
+      playerKpLedger.aggregate([
+        { $match: { userId: { $in: ids }, createdAt: { $gte: since } } },
+        {
+          $group: {
+            _id: { $dateToString: { format: config.fmt, date: "$createdAt", timezone: "UTC" } },
+            kpEarned: { $sum: "$kpDelta" },
+          },
+        },
+      ]).toArray(),
+    ]);
     for (const row of rows) {
       const point = index.get(row._id);
       if (point) {
@@ -1029,6 +1067,10 @@ export async function getCreatorSeries(aliases = [], range = "week", gameCreated
         point.plays = Number(row.plays ?? 0);
         point.timeSeconds = Number(row.timeSeconds ?? 0);
       }
+    }
+    for (const row of kpRows) {
+      const point = index.get(row._id);
+      if (point) point.kpEarned = Number(row.kpEarned ?? 0);
     }
   }
 
