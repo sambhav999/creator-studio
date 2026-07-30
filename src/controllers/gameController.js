@@ -202,7 +202,7 @@ export async function publishGame(request, response, next) {
       published: true,
       status: "published",
       publishedAt,
-      playPath: `/studio/play/${game.id}`
+      playPath: `/play?gameId=${game.id}`
     };
     await updateGamePackageFields(game.id, { publish });
     // 0G: pin an immutable snapshot of the exact build being published.
