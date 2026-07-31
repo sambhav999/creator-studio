@@ -218,9 +218,20 @@ function resolveEvmWalletAddress({ evmWalletAddress, userId, identityAliases }) 
 
 export function enrichAuthPayload(payload = {}) {
   const evmWalletAddress = resolveEvmWalletAddress(payload);
-  return evmWalletAddress === payload.evmWalletAddress
-    ? payload
-    : { ...payload, evmWalletAddress };
+  const telegramAlias = payload.telegramUserId ? `tg_${payload.telegramUserId}` : null;
+  const identityAliases = unique([
+    ...(Array.isArray(payload.identityAliases) ? payload.identityAliases : []),
+    payload.userId,
+    payload.privyUserId,
+    evmWalletAddress,
+    payload.tonWalletAddress,
+    telegramAlias
+  ]);
+  return {
+    ...payload,
+    evmWalletAddress,
+    identityAliases
+  };
 }
 
 /** Drop JWT metadata so re-signing a verified token does not conflict with expiresIn. */

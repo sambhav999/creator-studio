@@ -1,11 +1,13 @@
 import { z } from "zod";
 import { enrichAuthPayload } from "../services/authService.js";
+import { authIdentityAliases } from "../services/identityAliasService.js";
 import {
   confirmCreatorSubscription,
   getCreatorSubscription,
   getCreatorSubscriptionTiers,
   quoteCreatorSubscription
 } from "../services/creatorSubscriptionService.js";
+import { listPaymentHistoryForUser } from "../services/paymentHistoryService.js";
 
 const quoteSchema = z
   .object({
@@ -72,6 +74,19 @@ export async function confirmMyCreatorSubscription(request, response, next) {
         userId: request.auth?.userId
       })
     );
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function listMyCreatorTransactions(request, response, next) {
+  try {
+    const auth = enrichAuthPayload(request.auth ?? {});
+    const transactions = await listPaymentHistoryForUser({
+      evmWalletAddress: auth.evmWalletAddress,
+      identityAliases: authIdentityAliases(auth)
+    });
+    response.json({ transactions });
   } catch (error) {
     next(error);
   }
