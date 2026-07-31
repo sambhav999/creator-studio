@@ -851,8 +851,9 @@ export async function awardReferralPlay({ referrerId, referredId, attributionId,
  * Persists the user's chosen display name so leaderboards (and anything else
  * reading the creators/balances docs) show it instead of the wallet address.
  */
-export async function setProfileUsername({ userId, username }) {
+export async function setProfileUsername({ userId, username, aliases = [userId] }) {
   const normalizedUserId = normalizeUserId(userId);
+  const normalizedAliases = [...new Set([userId, ...aliases].map(normalizeUserId).filter(Boolean))];
   const name = String(username || "").trim().slice(0, 32);
   if (!normalizedUserId || !name) {
     const error = new Error("userId and username are required");
@@ -861,41 +862,127 @@ export async function setProfileUsername({ userId, username }) {
   }
   const { creators, browserBalances } = await collections();
   const now = new Date();
-  await Promise.all([
+  await Promise.all(normalizedAliases.flatMap((identity) => [
     creators.updateOne(
-      { creatorId: normalizedUserId },
-      { $set: { creatorId: normalizedUserId, username: name, updatedAt: now }, $setOnInsert: { createdAt: now } },
+      { creatorId: identity },
+      { $set: { creatorId: identity, username: name, updatedAt: now }, $setOnInsert: { createdAt: now } },
       { upsert: true },
     ),
     browserBalances.updateOne(
-      { walletAddress: normalizedUserId },
-      { $set: { walletAddress: normalizedUserId, username: name, updatedAt: now }, $setOnInsert: { createdAt: now, kultPoints: 0 } },
+      { walletAddress: identity },
+      { $set: { walletAddress: identity, username: name, updatedAt: now }, $setOnInsert: { createdAt: now, kultPoints: 0 } },
       { upsert: true },
     ),
-  ]);
+  ]));
   return { userId: normalizedUserId, username: name };
 }
 
-export async function getPointSummary(userId) {
+export async function getProfileUsername(userId, aliases = [userId]) {
   const normalizedUserId = normalizeUserId(userId);
-  if (!normalizedUserId) return null;
-  const { browserBalances } = await collections();
-  const balance = await browserBalances.findOne({ walletAddress: normalizedUserId }, { projection: { _id: 0 } });
+  if (!normalizedUserId) return { userId: "", username: null };
+  const ids = [...new Set([userId, ...aliases].map(normalizeUserId).filter(Boolean))];
+  const { creators, browserBalances } = await collections();
+  const [creator, balance] = await Promise.all([
+    creators.findOne(
+      { creatorId: { $in: ids }, username: { $exists: true } },
+      { projection: { _id: 0, username: 1 } },
+    ),
+    browserBalances.findOne(
+      { walletAddress: { $in: ids }, username: { $exists: true } },
+      { projection: { _id: 0, username: 1 } },
+    ),
+  ]);
   return {
     userId: normalizedUserId,
-    walletAddress: normalizedUserId,
-    kultPoints: Number(balance?.kultPoints ?? 0),
-    lifetimePoints: Number(balance?.kultPoints ?? 0),
-    level: kpLevelForPoints(balance?.kultPoints ?? 0),
-    updatedAt: balance?.updatedAt ?? null,
+    username: creator?.username ?? balance?.username ?? null,
   };
 }
 
-export async function getCreatorScoreSummary(creatorId) {
+export async function getPointSummary(userId, aliases = [userId]) {
+  const normalizedUserId = normalizeUserId(userId);
+  if (!normalizedUserId) return null;
+  const ids = [...new Set([userId, ...aliases].map(normalizeUserId).filter(Boolean))];
+  const { browserBalances, playerKpLedger } = await collections();
+  const [balances, ledger] = await Promise.all([
+    browserBalances.find({ walletAddress: { $in: ids } }, { projection: { _id: 0 } }).toArray(),
+    playerKpLedger.find({ userId: { $in: ids } }, { projection: { _id: 0 } }).toArray(),
+  ]);
+  const lifetimePoints = ledger.length
+    ? ledger.reduce((total, event) => total + Number(event.kpDelta ?? 0), 0)
+    : balances.reduce((total, balance) => total + Number(balance.kultPoints ?? 0), 0);
+  const dailyPoints = {};
+  const weeklyPoints = {};
+  let updatedAt = null;
+  for (const event of ledger) {
+    if (event.day) dailyPoints[event.day] = (dailyPoints[event.day] ?? 0) + Number(event.kpDelta ?? 0);
+    if (event.week) weeklyPoints[event.week] = (weeklyPoints[event.week] ?? 0) + Number(event.kpDelta ?? 0);
+    if (event.createdAt && (!updatedAt || new Date(event.createdAt) > new Date(updatedAt))) updatedAt = event.createdAt;
+  }
+  const now = new Date();
+  return {
+    userId: normalizedUserId,
+    walletAddress: normalizedUserId,
+    kultPoints: lifetimePoints,
+    lifetimePoints,
+    dailyPoints,
+    weeklyPoints,
+    currentDay: dayKey(now),
+    currentWeek: weekKey(now),
+    level: kpLevelForPoints(lifetimePoints),
+    updatedAt: updatedAt ?? balances.find((balance) => balance.updatedAt)?.updatedAt ?? null,
+  };
+}
+
+export async function getDailyPlayerActivity(userId, aliases = [userId], now = new Date()) {
+  const ids = [...new Set([userId, ...aliases].map(normalizeUserId).filter(Boolean))];
+  if (!ids.length) return { plays: 0, publishes: 0, shares: 0 };
+  const { playerKpLedger } = await collections();
+  const events = await playerKpLedger.find(
+    { userId: { $in: ids }, day: dayKey(now) },
+    { projection: { _id: 0, action: 1, targetGameId: 1 } },
+  ).toArray();
+  const playedGames = new Set(events
+    .filter((event) => ["game_play_qualified", "game_complete"].includes(event.action))
+    .map((event) => event.targetGameId)
+    .filter(Boolean));
+  return {
+    plays: playedGames.size,
+    publishes: events.filter((event) => event.action === "game_publish").length,
+    shares: events.filter((event) => event.action === "game_share").length,
+  };
+}
+
+export async function getCreatorScoreSummary(creatorId, aliases = [creatorId]) {
   const normalizedCreatorId = normalizeUserId(creatorId);
   if (!normalizedCreatorId) return null;
-  const { creatorScoreBalances } = await collections();
-  return creatorScoreBalances.findOne({ creatorId: normalizedCreatorId }, { projection: { _id: 0 } });
+  const ids = [...new Set([creatorId, ...aliases].map(normalizeUserId).filter(Boolean))];
+  const { creatorScoreBalances, creatorScoreLedger } = await collections();
+  const [balances, ledger] = await Promise.all([
+    creatorScoreBalances.find({ creatorId: { $in: ids } }, { projection: { _id: 0 } }).toArray(),
+    creatorScoreLedger.find({ creatorId: { $in: ids } }, { projection: { _id: 0 } }).toArray(),
+  ]);
+  if (!balances.length && !ledger.length) return null;
+  const lifetimeScore = ledger.length
+    ? ledger.reduce((total, event) => total + Number(event.csDelta ?? 0), 0)
+    : balances.reduce((total, balance) => total + Number(balance.lifetimeScore ?? balance.lifetimePoints ?? 0), 0);
+  const dailyScore = {};
+  const weeklyScore = {};
+  for (const event of ledger) {
+    if (event.day) dailyScore[event.day] = (dailyScore[event.day] ?? 0) + Number(event.csDelta ?? 0);
+    if (event.week) weeklyScore[event.week] = (weeklyScore[event.week] ?? 0) + Number(event.csDelta ?? 0);
+  }
+  const now = new Date();
+  return {
+    creatorId: normalizedCreatorId,
+    lifetimeScore,
+    lifetimePoints: lifetimeScore,
+    dailyScore,
+    dailyPoints: dailyScore,
+    weeklyScore,
+    weeklyPoints: weeklyScore,
+    currentDay: dayKey(now),
+    currentWeek: weekKey(now),
+  };
 }
 
 // Creator Score (the platform's earning unit) earned per game, summed from the

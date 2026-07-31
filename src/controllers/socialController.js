@@ -33,7 +33,7 @@ import {
   getEconomyLeaderboard,
 } from "../services/socialService.js";
 import { logActivity, getGameTitle, getUserActivities, getRecentActivities } from "../services/activityService.js";
-import { getPointSummary, setProfileUsername } from "../services/pointsService.js";
+import { getPointSummary, getProfileUsername, setProfileUsername } from "../services/pointsService.js";
 import { authIdentityAliases, authOwnsIdentity } from "../services/identityAliasService.js";
 
 // ─── Schemas ───────────────────────────────────────────────────────────────
@@ -410,8 +410,16 @@ export async function handleDailyLogin(req, res, next) {
 export async function handleDailyChallenge(req, res, next) {
   try {
     const input = dailyChallengeSchema.parse(req.body ?? {});
+    if (req.auth && !authOwnsIdentity(req.auth, input.userId)) {
+      res.status(403).json({ error: "Cannot claim a challenge for another user" });
+      return;
+    }
+    const userId = req.auth?.userId ?? input.userId;
     res.status(201).json(await recordDailyChallenge({
       ...input,
+      userId,
+      creatorId: userId,
+      aliases: req.auth ? authIdentityAliases(req.auth) : [userId],
       signals: requestSignals(req, input.deviceId),
     }));
   } catch (error) {
@@ -504,9 +512,27 @@ const profileSchema = z.object({
 
 export async function handleUpdateProfile(req, res, next) {
   try {
-    const { userId, username } = profileSchema.parse(req.body);
-    const result = await setProfileUsername({ userId, username });
+    const { userId: submittedUserId, username } = profileSchema.parse(req.body);
+    if (req.auth && !authOwnsIdentity(req.auth, submittedUserId)) {
+      res.status(403).json({ error: "Cannot update another user's profile" });
+      return;
+    }
+    const userId = req.auth?.userId ?? submittedUserId;
+    const aliases = req.auth ? authIdentityAliases(req.auth) : [userId];
+    const result = await setProfileUsername({ userId, username, aliases });
     res.json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function handleGetProfile(req, res, next) {
+  try {
+    const { userId } = userIdSchema.parse(req.params);
+    const ownsIdentity = authOwnsIdentity(req.auth, userId);
+    const canonicalUserId = ownsIdentity ? (req.auth?.userId ?? userId) : userId;
+    const aliases = ownsIdentity ? authIdentityAliases(req.auth) : [userId];
+    res.json(await getProfileUsername(canonicalUserId, aliases));
   } catch (error) {
     next(error);
   }
@@ -515,7 +541,12 @@ export async function handleUpdateProfile(req, res, next) {
 export async function handleGetPointSummary(req, res, next) {
   try {
     const { userId } = userIdSchema.parse(req.params);
-    const summary = await getPointSummary(userId);
+    const ownsIdentity = authOwnsIdentity(req.auth, userId);
+    const canonicalUserId = ownsIdentity ? (req.auth?.userId ?? userId) : userId;
+    const aliases = ownsIdentity
+      ? authIdentityAliases(req.auth)
+      : [userId];
+    const summary = await getPointSummary(canonicalUserId, aliases);
     res.json({
       userId,
       kultPoints: summary?.kultPoints ?? 0,
@@ -553,7 +584,12 @@ export async function handleGetTopViewed(req, res, next) {
 export async function handleGetDailyChallenges(req, res, next) {
   try {
     const { userId } = userIdSchema.parse(req.params);
-    res.json(await getDailyChallenges(userId));
+    const ownsIdentity = authOwnsIdentity(req.auth, userId);
+    const canonicalUserId = ownsIdentity ? (req.auth?.userId ?? userId) : userId;
+    const aliases = ownsIdentity
+      ? authIdentityAliases(req.auth)
+      : [userId];
+    res.json(await getDailyChallenges(canonicalUserId, aliases));
   } catch (error) {
     next(error);
   }
@@ -562,7 +598,12 @@ export async function handleGetDailyChallenges(req, res, next) {
 export async function handleGetAchievements(req, res, next) {
   try {
     const { userId } = userIdSchema.parse(req.params);
-    res.json(await getAchievements(userId));
+    const ownsIdentity = authOwnsIdentity(req.auth, userId);
+    const canonicalUserId = ownsIdentity ? (req.auth?.userId ?? userId) : userId;
+    const aliases = ownsIdentity
+      ? authIdentityAliases(req.auth)
+      : [userId];
+    res.json(await getAchievements(canonicalUserId, aliases));
   } catch (error) {
     next(error);
   }

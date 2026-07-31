@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { optionalAuth } from "../services/authService.js";
+import { optionalAuth, requireAuth } from "../services/authService.js";
 import {
   handleToggleLike,
   handleGetLikeStatus,
@@ -28,6 +28,7 @@ import {
   handleGetFollowing,
   handleGetCreatorStats,
   handleUpdateProfile,
+  handleGetProfile,
   handleGetPointSummary,
   handleGetEconomyLeaderboard,
   handleGetTopViewed,
@@ -79,7 +80,7 @@ socialRouter.post("/completions/:gameId", handleRecordCompletion);
 
 // Dual economy reward hooks
 socialRouter.post("/daily-login", handleDailyLogin);
-socialRouter.post("/daily-challenge", handleDailyChallenge);
+socialRouter.post("/daily-challenge", requireAuth, handleDailyChallenge);
 socialRouter.post("/remixes", handleRecordRemix);
 socialRouter.post("/milestones", handleRecordMilestone);
 
@@ -89,7 +90,8 @@ socialRouter.get("/follows/user/:userId", handleGetFollowing);
 socialRouter.get("/follows/:creatorId", handleGetFollowStatus);
 
 // Creator profile stats (real numbers)
-socialRouter.post("/profile", handleUpdateProfile);
+socialRouter.post("/profile", requireAuth, handleUpdateProfile);
+socialRouter.get("/profile/:userId", handleGetProfile);
 socialRouter.get("/creator-stats/:creatorId", handleGetCreatorStats);
 socialRouter.get("/points/:userId", handleGetPointSummary);
 socialRouter.get("/economy-leaderboard", handleGetEconomyLeaderboard);

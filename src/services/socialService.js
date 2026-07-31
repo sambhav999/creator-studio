@@ -12,6 +12,7 @@ import {
   awardShare,
   getCreatorScoreSummary,
   getCreatorScoreLeaderboard,
+  getDailyPlayerActivity,
   getKultPointsLeaderboard,
   getPointSummary,
 } from "./pointsService.js";
@@ -613,7 +614,19 @@ export async function recordDailyLogin({ userId, signals }) {
   return { rewarded: Boolean(points.awarded || points.duplicate), points };
 }
 
-export async function recordDailyChallenge({ userId, creatorId, challengeId, gameId, signals }) {
+export async function recordDailyChallenge({ userId, creatorId, challengeId, gameId, aliases, signals }) {
+  const summary = await getDailyChallenges(userId, aliases);
+  const challenge = summary.challenges.find((item) => item.id === challengeId);
+  if (!challenge) {
+    const error = new Error("Unknown or expired daily challenge");
+    error.status = 400;
+    throw error;
+  }
+  if (!challenge.completed) {
+    const error = new Error("Daily challenge is not complete");
+    error.status = 409;
+    throw error;
+  }
   const points = await awardDailyChallenge({ userId, creatorId, challengeId, gameId, signals });
   return { rewarded: Boolean(points.awarded || points.duplicate), points };
 }
@@ -769,7 +782,7 @@ export async function getCreatorStats(creatorId, creatorAliases = [creatorId]) {
       gameIds.length ? db.collection(COLLECTIONS.shares).countDocuments({ gameId: { $in: gameIds } }) : 0,
       gameIds.length ? games.countDocuments({ remixOf: { $in: gameIds } }) : 0,
       games.countDocuments({ creatorId: { $in: aliases }, "browserFeature.featured": true }),
-      getCreatorScoreSummary(creatorId),
+      getCreatorScoreSummary(creatorId, aliases),
     ]);
     const plays = ownGames.reduce((total, g) => total + (g.views ?? 0), 0);
     const score = creatorScore({ games: ownGames.length, plays, likes, shares, remixes, followers, featured });
@@ -905,35 +918,33 @@ export async function notifyFollowersOfPublish(game) {
   return { notified: followers.length };
 }
 
-export async function getDailyChallenges(userId) {
+export async function getDailyChallenges(userId, aliases = [userId]) {
   const today = dayKey();
-  const stats = await getCreatorStats(userId);
-  const points = await getPointSummary(userId).catch(() => null);
-  const dailyPoints = Number(points?.dailyPoints?.[today] ?? 0);
+  const activity = await getDailyPlayerActivity(userId, aliases);
   const challenges = [
     {
       id: `${today}:play-3`,
       title: "Play 3 games",
-      metric: "dailyKP",
+      metric: "gamesPlayed",
       target: 3,
-      progress: Math.min(3, dailyPoints),
-      reward: "15 KP",
+      progress: Math.min(3, activity.plays),
+      reward: "100 KP + 250 Creator Score",
     },
     {
       id: `${today}:publish-1`,
       title: "Publish 1 game",
       metric: "publishedGames",
       target: 1,
-      progress: Math.min(1, stats.games),
-      reward: "Creator Score boost",
+      progress: Math.min(1, activity.publishes),
+      reward: "100 KP + 250 Creator Score",
     },
     {
       id: `${today}:share-1`,
-      title: "Earn 1 share",
+      title: "Share 1 game",
       metric: "shares",
       target: 1,
-      progress: Math.min(1, stats.shares),
-      reward: "10 KP",
+      progress: Math.min(1, activity.shares),
+      reward: "100 KP + 250 Creator Score",
     },
   ].map((challenge) => ({
     ...challenge,
@@ -942,9 +953,9 @@ export async function getDailyChallenges(userId) {
   return { userId, date: today, week: weekKey(), challenges };
 }
 
-export async function getAchievements(userId) {
-  const stats = await getCreatorStats(userId);
-  const points = await getPointSummary(userId).catch(() => null);
+export async function getAchievements(userId, aliases = [userId]) {
+  const stats = await getCreatorStats(userId, aliases);
+  const points = await getPointSummary(userId, aliases).catch(() => null);
   const lifetimePoints = Number(points?.lifetimePoints ?? 0);
   const achievements = [
     { id: "first-publish", title: "First Publish", description: "Publish your first game.", unlocked: stats.games >= 1 },
