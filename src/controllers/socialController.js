@@ -589,11 +589,12 @@ export async function handleGetTopViewed(req, res, next) {
 export async function handleGetDailyChallenges(req, res, next) {
   try {
     const { userId } = userIdSchema.parse(req.params);
-    const ownsIdentity = authOwnsIdentity(req.auth, userId);
-    const canonicalUserId = ownsIdentity ? (req.auth?.userId ?? userId) : userId;
-    const aliases = ownsIdentity
-      ? authIdentityAliases(req.auth)
-      : [userId];
+    // Dashboard method: an authenticated caller always resolves from their full
+    // token alias set, so progress counts activity across all their linked
+    // logins regardless of which id form the client sent.
+    const callerAliases = authIdentityAliases(req.auth);
+    const canonicalUserId = callerAliases.length > 0 ? (req.auth?.userId ?? userId) : userId;
+    const aliases = callerAliases.length > 0 ? callerAliases : [userId];
     res.json(await getDailyChallenges(canonicalUserId, aliases));
   } catch (error) {
     next(error);
@@ -603,11 +604,12 @@ export async function handleGetDailyChallenges(req, res, next) {
 export async function handleGetAchievements(req, res, next) {
   try {
     const { userId } = userIdSchema.parse(req.params);
-    const ownsIdentity = authOwnsIdentity(req.auth, userId);
-    const canonicalUserId = ownsIdentity ? (req.auth?.userId ?? userId) : userId;
-    const aliases = ownsIdentity
-      ? authIdentityAliases(req.auth)
-      : [userId];
+    // Dashboard method: resolve from the caller's full token alias set so
+    // unlocks (published games, likes, plays, score, KP) count everything they
+    // own across their linked identities.
+    const callerAliases = authIdentityAliases(req.auth);
+    const canonicalUserId = callerAliases.length > 0 ? (req.auth?.userId ?? userId) : userId;
+    const aliases = callerAliases.length > 0 ? callerAliases : [userId];
     res.json(await getAchievements(canonicalUserId, aliases));
   } catch (error) {
     next(error);
