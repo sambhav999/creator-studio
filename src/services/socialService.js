@@ -918,9 +918,38 @@ export async function notifyFollowersOfPublish(game) {
   return { notified: followers.length };
 }
 
+async function getPublishedGameCounts(aliases, now = new Date()) {
+  const creatorIds = [...new Set(aliases.filter(Boolean))];
+  if (!creatorIds.length) return { lifetime: 0, today: 0 };
+  const games = await getGameCollection();
+  const startOfDay = new Date(Date.UTC(
+    now.getUTCFullYear(),
+    now.getUTCMonth(),
+    now.getUTCDate(),
+  ));
+  const endOfDay = new Date(startOfDay);
+  endOfDay.setUTCDate(endOfDay.getUTCDate() + 1);
+  const baseFilter = {
+    creatorId: { $in: creatorIds },
+    "publish.published": true,
+    tier: { $ne: "template" },
+  };
+  const [lifetime, today] = await Promise.all([
+    games.countDocuments(baseFilter),
+    games.countDocuments({
+      ...baseFilter,
+      "publish.publishedAt": { $gte: startOfDay, $lt: endOfDay },
+    }),
+  ]);
+  return { lifetime, today };
+}
+
 export async function getDailyChallenges(userId, aliases = [userId]) {
   const today = dayKey();
-  const activity = await getDailyPlayerActivity(userId, aliases);
+  const [activity, publishedGames] = await Promise.all([
+    getDailyPlayerActivity(userId, aliases),
+    getPublishedGameCounts(aliases),
+  ]);
   const challenges = [
     {
       id: `${today}:play-3`,
@@ -935,7 +964,7 @@ export async function getDailyChallenges(userId, aliases = [userId]) {
       title: "Publish 1 game",
       metric: "publishedGames",
       target: 1,
-      progress: Math.min(1, activity.publishes),
+      progress: Math.min(1, Math.max(activity.publishes, publishedGames.today)),
       reward: "100 KP + 250 Creator Score",
     },
     {
@@ -954,16 +983,19 @@ export async function getDailyChallenges(userId, aliases = [userId]) {
 }
 
 export async function getAchievements(userId, aliases = [userId]) {
-  const stats = await getCreatorStats(userId, aliases);
-  const points = await getPointSummary(userId, aliases).catch(() => null);
+  const [stats, points, publishedGames] = await Promise.all([
+    getCreatorStats(userId, aliases),
+    getPointSummary(userId, aliases).catch(() => null),
+    getPublishedGameCounts(aliases),
+  ]);
   const lifetimePoints = Number(points?.lifetimePoints ?? 0);
   const achievements = [
-    { id: "first-publish", title: "First Publish", description: "Publish your first game.", unlocked: stats.games >= 1 },
+    { id: "first-publish", title: "First Publish", description: "Publish your first game.", unlocked: publishedGames.lifetime >= 1 },
     { id: "crowd-spark", title: "Crowd Spark", description: "Reach 10 total likes.", unlocked: stats.likes >= 10 },
     { id: "playmaker", title: "Playmaker", description: "Reach 100 total plays.", unlocked: stats.plays >= 100 },
     { id: "rising-creator", title: "Rising Creator", description: "Reach 500 Creator Score.", unlocked: stats.creatorScore >= 500 },
     { id: "kp-collector", title: "KP Collector", description: "Earn 250 KP.", unlocked: lifetimePoints >= 250 },
-    { id: "genesis-founder", title: "Genesis Founder", description: "Early KULT creator identity badge.", unlocked: stats.games > 0 || lifetimePoints > 0 },
+    { id: "genesis-founder", title: "Genesis Founder", description: "Early KULT creator identity badge.", unlocked: publishedGames.lifetime > 0 || lifetimePoints > 0 },
   ];
   return {
     userId,

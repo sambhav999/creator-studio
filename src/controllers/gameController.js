@@ -237,20 +237,22 @@ export async function publishGame(request, response, next) {
       activityType: "publish",
       details: `Published game "${game.title}"`
     });
-    await recordCreatorGamePublished({
-      creatorId: game.creatorId ?? request.auth?.userId,
+    const canonicalCreatorId = request.auth?.userId ?? game.creatorId;
+    const publicationRecord = await recordCreatorGamePublished({
+      creatorId: canonicalCreatorId,
       gameId: game.id,
-    }).catch(() => null);
+    }).catch((error) => ({ recorded: false, error: error.message }));
     const points = await awardFirstGameBonus({
-      creatorId: game.creatorId ?? request.auth?.userId,
+      creatorId: canonicalCreatorId,
       gameId: game.id,
-    }).catch(() => null);
+    }).catch((error) => ({ awarded: false, error: error.message }));
     const notifications = await notifyFollowersOfPublish({ ...game, publish }).catch(() => ({ notified: 0 }));
     response.json({
       ok: true,
       game: { ...game, publish },
       playPath: publish.playPath,
       points,
+      publicationRecord,
       notifications
     });
   } catch (error) {

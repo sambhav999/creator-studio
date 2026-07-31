@@ -15,6 +15,7 @@ import {
   awardRemix,
   awardShare,
   getCreatorScoreSummary,
+  getDailyPlayerActivity,
   getPointSummary,
   recordCreatorGamePublished,
 } from "../src/services/pointsService.js";
@@ -235,6 +236,28 @@ test("share and publish keep KP and CS separate", async () => {
   assert.equal(playerSummary.lifetimePoints, POINT_VALUES.playerShare);
   assert.equal(creatorKpSummary.lifetimePoints, POINT_VALUES.playerPublish);
   assert.equal(creatorScore.lifetimeScore, POINT_VALUES.creatorShare + POINT_VALUES.creatorPublish);
+});
+
+test("profile summaries find publish activity across authenticated identity aliases", async () => {
+  setupHarness();
+  await awardFirstGameBonus({ creatorId: "legacy-privy-id", gameId: "published-game" });
+
+  const activity = await getDailyPlayerActivity("canonical-wallet", [
+    "canonical-wallet",
+    "legacy-privy-id",
+  ]);
+  const points = await getPointSummary("canonical-wallet", [
+    "canonical-wallet",
+    "legacy-privy-id",
+  ]);
+  const creatorScore = await getCreatorScoreSummary("canonical-wallet", [
+    "canonical-wallet",
+    "legacy-privy-id",
+  ]);
+
+  assert.equal(activity.publishes, 1);
+  assert.equal(points.lifetimePoints, POINT_VALUES.playerPublish);
+  assert.equal(creatorScore.lifetimeScore, POINT_VALUES.creatorPublish);
 });
 
 test("follow rewards follower KP and creator CS once", async () => {
