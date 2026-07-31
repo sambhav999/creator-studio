@@ -496,9 +496,14 @@ export async function handleGetCreatorStats(req, res, next) {
   try {
     const requestedId = req.params.creatorId;
     const canonicalCreatorId = req.auth?.privyUserId ?? req.auth?.userId ?? requestedId;
-    const aliases = authOwnsIdentity(req.auth, requestedId)
-      ? authIdentityAliases(req.auth)
-      : [requestedId];
+    // Same resolution the creator dashboard uses: an authenticated caller always
+    // gets their OWN full identity alias set from the token, so stats count every
+    // game across their linked logins (DID, wallets, telegram) regardless of
+    // which id form the client sent in the URL. In this app every creator-stats
+    // call is a user viewing their own profile/home, so we trust the token over
+    // the URL id. Only unauthenticated requests fall back to the requested id.
+    const callerAliases = authIdentityAliases(req.auth);
+    const aliases = callerAliases.length > 0 ? callerAliases : [requestedId].filter(Boolean);
     res.json(await getCreatorStats(canonicalCreatorId, aliases));
   } catch (error) {
     next(error);
