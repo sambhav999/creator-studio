@@ -1,3 +1,18 @@
+import { appendFileSync } from "node:fs";
+
+// Optional real-time sink: when GENERATION_PROGRESS_FILE is set, every step is
+// written synchronously (so it's readable live, unlike buffered console output).
+function emitToProgressFile(startedAt, step, extra = {}) {
+  const path = process.env.GENERATION_PROGRESS_FILE;
+  if (!path) return;
+  const secs = ((Date.now() - startedAt) / 1000).toFixed(1);
+  try {
+    appendFileSync(path, `[+${secs}s] ${step}${Object.keys(extra).length ? " " + JSON.stringify(extra) : ""}\n`);
+  } catch {
+    // never let progress logging break generation
+  }
+}
+
 /** Structured timing logs for the prompt-to-game pipeline. */
 export function createGenerationLogger(requestId) {
   const startedAt = Date.now();
@@ -13,6 +28,7 @@ export function createGenerationLogger(requestId) {
       ...data,
     };
     console.info(`[generate-from-prompt] ${step}`, payload);
+    emitToProgressFile(startedAt, step, { sinceLastStepMs: now - lastStepAt });
     lastStepAt = now;
     return payload;
   };
@@ -30,6 +46,7 @@ export function createGenerationLogger(requestId) {
         stack: error?.stack,
         ...extra,
       });
+      emitToProgressFile(startedAt, `FAIL:${step}`, { message: error?.message ?? String(error), status: error?.status ?? null });
     },
     done(extra = {}) {
       return log("complete", extra);

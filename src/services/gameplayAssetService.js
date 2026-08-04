@@ -1,97 +1,124 @@
-import { generateImageAsset } from "./zeroGService.js";
+import sharp from "sharp";
+import { generateImageAsset, getModelsForTier } from "./zeroGService.js";
+import { removeBackground, bufferFromImage } from "./spriteAssetService.js";
+import { isSpacesConfigured, uploadPublicObject } from "./spacesStorageService.js";
 import { uploadThumbnail } from "./thumbnailService.js";
+import { putBufferOnZeroG } from "./zeroGStorage.js";
 
-function assetId(gameId, role) {
+// In-game artwork (NOT cover art). Produces a { role -> url } manifest that the
+// generated game's runtime (KULT_RUNTIME.drawAsset) loads and draws. Character
+// and object sprites are cut out to transparent PNGs; the environment keeps its
+// full background. Spaces/CDN is the fast "ready" path; 0G provenance is
+// fire-and-forget in the background.
+
+function safeId(gameId, role) {
   return `${String(gameId).replace(/[^a-zA-Z0-9_-]/g, "-")}--asset-${role}`;
 }
 
-function assetUrl(id) {
-  return `/api/thumbnails/${encodeURIComponent(id)}`;
-}
-
-async function downloadImage(url) {
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`Gameplay asset download failed (${response.status})`);
-  return {
-    buffer: Buffer.from(await response.arrayBuffer()),
-    contentType: response.headers.get("content-type") || "image/png"
-  };
-}
-
-async function generateOne({ id, role, prompt }) {
-  let result;
-  try {
-    result = await generateImageAsset({ prompt, size: "1024x1024" });
-  } catch {
-    result = await generateImageAsset({ prompt });
+// Store the finished sprite: Spaces/CDN when configured (fast, cacheable),
+// otherwise the Mongo-served thumbnail endpoint as a fallback.
+async function storeSprite({ gameId, role, buffer }) {
+  const key = `sprites/${gameId}/${role}.png`;
+  let url;
+  if (isSpacesConfigured()) {
+    url = await uploadPublicObject(key, buffer, "image/png");
+  } else {
+    const id = safeId(gameId, role);
+    await uploadThumbnail(id, buffer, "image/png", `${id}.png`);
+    url = `/api/thumbnails/${encodeURIComponent(id)}`;
   }
-  const image = result.images?.[0];
-  let buffer;
-  let contentType = "image/png";
-  if (image?.b64_json) buffer = Buffer.from(image.b64_json, "base64");
-  else if (image?.url) ({ buffer, contentType } = await downloadImage(image.url));
-  else throw new Error(`Image model returned no ${role} asset`);
-
-  await uploadThumbnail(id, buffer, contentType, `${id}.png`);
-  return { id, role, url: assetUrl(id), model: result.model, contentType };
+  // Background 0G provenance — never blocks readiness.
+  void putBufferOnZeroG({
+    objectType: "game-sprite",
+    objectId: `${gameId}:${role}`,
+    buffer,
+    contentType: "image/png",
+    fileName: `${role}.png`,
+    metadata: { gameId, role },
+  }).catch((error) => {
+    console.warn("0G sprite provenance upload failed", { gameId, role, message: error.message });
+  });
+  return url;
 }
 
 export function planGameplayAssets(game) {
   const gameId = game?.id;
   if (!gameId) throw new Error("game.id is required for gameplay assets");
   const title = game.title || "Game";
-  const specification = String(
+  const spec = String(
     game.generation?.prompt || game.customization?.prompt || game.gameplay?.mechanic || ""
-  ).slice(0, 12000);
-  const shared = [
-    `Game: ${title}.`,
-    specification,
-    "Create original production-quality in-game artwork, not cover art.",
-    "No logos, captions, title lettering, watermark, frame, mockup, or marketing layout.",
-    "Keep a consistent polished visual style suitable for a responsive browser game."
-  ].join(" ");
+  ).slice(0, 4000);
+  const shared = `Game: ${title}. ${spec}. Original production-quality in-game artwork, not cover art. No logos, no title text, no watermark, no frame, no UI.`;
+  const solidBg =
+    "CRITICAL: isolated on a completely plain, uniform, flat SINGLE-COLOR background — no scenery, no floor, no ground, no shadow, no gradient — so it can be cut out cleanly.";
 
   return [
     {
       role: "player",
-      id: assetId(gameId, "player"),
-      prompt: `${shared} Main playable character in a clear full-body action pose, centered, readable silhouette, isolated on a plain contrasting background for easy sprite rendering, detailed game-ready character art.`
+      transparent: true,
+      size: "1024x1024",
+      prompt: `${shared} The main playable character, single figure, clear full-body action pose, centered, readable silhouette, game-ready character art. ${solidBg}`,
     },
     {
       role: "environment",
-      id: assetId(gameId, "environment"),
-      prompt: `${shared} Seamless-feeling gameplay environment background matching the requested world, wide scenic composition, layered depth, no characters, open central play space, game-ready background art.`
+      transparent: false,
+      size: "1024x1536",
+      prompt: `${shared} A tall portrait gameplay BACKGROUND scene matching the requested world, layered depth, no characters, open central play space, seamless-feeling, game-ready background art.`,
     },
     {
       role: "objects",
-      id: assetId(gameId, "objects"),
-      prompt: `${shared} A clean in-game asset sheet containing the principal obstacles, collectibles, terrain props, and effects requested by the specification, separated with generous spacing on a plain background, consistent scale and lighting.`
-    }
+      transparent: true,
+      size: "1024x1024",
+      prompt: `${shared} A single clear game object/collectible/obstacle prop from the requested world, centered, consistent scale and lighting, game-ready prop art. ${solidBg}`,
+    },
   ];
 }
 
-export function gameplayAssetManifest(game) {
-  return Object.fromEntries(
-    planGameplayAssets(game).map(({ role, id }) => [role, assetUrl(id)])
-  );
+async function generateOne({ gameId, item, model }) {
+  const generated = await generateImageAsset({ prompt: item.prompt, size: item.size, models: { image: model } });
+  const source = await bufferFromImage(generated.images?.[0]);
+
+  let buffer;
+  if (item.transparent) {
+    const keyed = await removeBackground(source);
+    buffer = await sharp(keyed)
+      .trim({ threshold: 10 })
+      .resize(256, 256, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
+      .png({ quality: 90 })
+      .toBuffer();
+  } else {
+    // Environment keeps its full background; normalize to a portrait canvas.
+    buffer = await sharp(source).resize(768, 1152, { fit: "cover", position: "centre" }).png({ quality: 88 }).toBuffer();
+  }
+  const url = await storeSprite({ gameId, role: item.role, buffer });
+  return { role: item.role, url, model, transparent: item.transparent };
 }
 
-export async function generateGameplayAssets(game, onProgress) {
+// Generates the player/environment/objects assets for a game in parallel and
+// returns the manifest the code runtime consumes.
+export async function generateGameplayAssets(game, { tier, onProgress } = {}) {
   const plan = planGameplayAssets(game);
+  const models = getModelsForTier(tier);
   onProgress?.({ stage: "generating-assets", completed: 0, total: plan.length });
   let completed = 0;
-  const assets = await Promise.all(
+  const settled = await Promise.allSettled(
     plan.map(async (item) => {
-      const asset = await generateOne(item);
+      const asset = await generateOne({ gameId: game.id, item, model: models.asset });
       completed += 1;
       onProgress?.({ stage: "generating-assets", completed, total: plan.length });
       return asset;
     })
   );
+  const assets = settled.filter((r) => r.status === "fulfilled").map((r) => r.value);
   return {
-    status: "ready",
+    status: assets.length ? "ready" : "failed",
     generatedAt: new Date(),
+    model: models.asset,
     manifest: Object.fromEntries(assets.map((asset) => [asset.role, asset.url])),
-    assets
+    assets,
   };
+}
+
+export function gameplayAssetManifest(game) {
+  return Object.fromEntries(planGameplayAssets(game).map(({ role }) => [role, safeId(game.id, role)]));
 }

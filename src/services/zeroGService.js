@@ -40,6 +40,7 @@ const TIER_DEFAULTS = {
     repair: "glm-5",
     background: "deepseek-v4-flash",
     image: "z-image-turbo",
+    asset: "z-image-turbo",
     vision: "qwen/qwen3-vl-30b-a3b-instruct",
     speech: "openai/whisper-large-v3",
     strategy: "hybrid"
@@ -51,6 +52,7 @@ const TIER_DEFAULTS = {
     repair: "gpt-5.6-terra",
     background: "deepseek-v4-flash",
     image: "z-image-turbo",
+    asset: "z-image-turbo",
     vision: "qwen3.7-plus",
     speech: "openai/whisper-large-v3",
     strategy: "pure-agent"
@@ -62,6 +64,7 @@ const TIER_DEFAULTS = {
     repair: "claude-fable-5",
     background: "deepseek-v4-pro",
     image: "z-image-turbo",
+    asset: "z-image-turbo",
     vision: "kimi-k3",
     speech: "openai/whisper-large-v3",
     strategy: "pure-agent"
@@ -94,6 +97,7 @@ export function getModelsForTier(tier) {
     repair: env("REPAIR_MODEL") ?? d.repair,
     background: env("BACKGROUND_MODEL") ?? d.background,
     image: env("IMAGE_MODEL") ?? d.image,
+    asset: env("ASSET_MODEL") ?? d.asset ?? d.image,
     vision: env("VISION_MODEL") ?? d.vision,
     speech: env("SPEECH_MODEL") ?? d.speech
   };
@@ -139,6 +143,7 @@ export function getEditingModelsForTier(tier) {
     repair: env("REPAIR_MODEL") ?? d.repair,
     background: env("BACKGROUND_MODEL") ?? d.background,
     image: env("IMAGE_MODEL") ?? d.image,
+    asset: env("ASSET_MODEL") ?? d.asset ?? d.image,
     vision: env("VISION_MODEL") ?? d.vision,
     speech: env("SPEECH_MODEL") ?? d.speech
   };
@@ -529,30 +534,45 @@ export async function runBackgroundTask({
   });
 }
 
+// Hard ceiling for a single 0G image request. Without this the fetch can hang
+// forever on a slow/unresponsive image endpoint, which is what left thumbnail
+// jobs stuck in "running" and games without a cover.
+const IMAGE_REQUEST_TIMEOUT_MS = Number(process.env.ZERO_G_IMAGE_TIMEOUT_MS) || 90_000;
+const IMAGE_MAX_ATTEMPTS = Math.max(1, Number(process.env.ZERO_G_IMAGE_ATTEMPTS) || 3);
+
 export async function generateImageAsset({ prompt, size = "1024x1024", n = 1, models = zeroGModels }) {
   const { apiKey, baseUrl } = getClientConfig();
 
-  const response = await fetch(`${baseUrl}/images/generations`, {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${apiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      model: models.image,
-      prompt,
-      size,
-      n
-    })
-  });
-
-  const data = await parseJsonResponse(response);
-  return {
-    provider: "0g",
-    model: models.image,
-    images: data.data ?? [],
-    usage: data.usage ?? null
-  };
+  let lastError;
+  for (let attempt = 1; attempt <= IMAGE_MAX_ATTEMPTS; attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), IMAGE_REQUEST_TIMEOUT_MS);
+    try {
+      const response = await fetch(`${baseUrl}/images/generations`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${apiKey}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ model: models.image, prompt, size, n }),
+        signal: controller.signal
+      });
+      const data = await parseJsonResponse(response);
+      const images = data.data ?? [];
+      if (images.length === 0) throw new Error("Image agent returned no image");
+      return { provider: "0g", model: models.image, images, usage: data.usage ?? null };
+    } catch (error) {
+      lastError = error.name === "AbortError"
+        ? new Error(`0G image request timed out after ${IMAGE_REQUEST_TIMEOUT_MS}ms`)
+        : error;
+      if (attempt < IMAGE_MAX_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, 1_500 * attempt));
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw lastError ?? new Error("0G image request failed");
 }
 
 export async function analyzeReferenceImage({ prompt, imageUrl, imageBase64, mimeType = "image/png" }) {

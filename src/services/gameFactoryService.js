@@ -10,10 +10,15 @@ export function createGamePackage(input) {
     throw error;
   }
 
-  const theme = themePresets[input.theme] ?? themePresets.neon;
+  // Only a theme the caller actually chose (from the prompt) prefixes the title.
+  // When no theme is implied, the title stays the plain game name — no forced
+  // "Neon …". A palette is still needed for rendering, so it falls back to a
+  // neutral preset without leaking that word into the name.
+  const themePreset = themePresets[input.theme] ?? null;
+  const theme = themePreset ?? themePresets.neon;
   const difficulty = input.difficulty ?? "normal";
   const tuning = template.difficulty[difficulty] ?? template.difficulty.normal;
-  const title = `${theme.label} ${template.name}`;
+  const title = themePreset ? `${themePreset.label} ${template.name}` : template.name;
 
   return {
     id: nanoid(12),
@@ -27,7 +32,7 @@ export function createGamePackage(input) {
     reliability: `${Math.round(template.reliability * 100)}%`,
     customization: {
       prompt: input.prompt ?? "",
-      theme: theme.label,
+      theme: themePreset ? themePreset.label : "Custom",
       difficulty,
       level: input.customization ?? "light",
       extra: input.extra ?? "none"

@@ -3,14 +3,40 @@ import { createGamePackage } from "./gameFactoryService.js";
 import { createRefinementBundle } from "./refinementService.js";
 import { createGenerationLogger } from "../utils/generationLogger.js";
 import { createOrchestrationPlan, generateImageAsset, runBackgroundTask, getModelsForTier, getTierStrategy, normalizeTier, zeroGModels } from "./zeroGService.js";
+import { generateGameplayAssets } from "./gameplayAssetService.js";
 import { nanoid } from "nanoid";
 
 const defaultOptions = {
-  theme: "neon",
+  theme: null,
   difficulty: "normal",
   customization: "medium",
   extra: "none"
 };
+
+// Infers a theme from the user's prompt instead of always defaulting to "neon".
+// Returns one of the known theme-preset keys, or null when the prompt doesn't
+// clearly imply a theme (callers then avoid forcing a theme label/prefix).
+const THEME_KEYWORDS = {
+  space: ["space", "galaxy", "star", "planet", "cosmic", "alien", "astronaut", "sci-fi", "scifi", "nebula", "orbit", "spaceship", "ufo", "rocket", "mars", "meteor", "asteroid"],
+  fantasy: ["fantasy", "magic", "wizard", "dragon", "knight", "castle", "medieval", "elf", "sword", "dungeon", "kingdom", "goblin", "sorcerer", "potion", "quest", "mythic", "fairy", "witch"],
+  nature: ["forest", "jungle", "ocean", "sea", "animal", "garden", "tree", "farm", "fruit", "nature", "safari", "flower", "beach", "island", "wildlife", "mountain", "river", "fish", "bird", "candy"],
+  retro: ["retro", "pixel", "8-bit", "8bit", "arcade", "vintage", "classic", "old-school", "oldschool", "chiptune"],
+  neon: ["neon", "cyber", "cyberpunk", "glow", "hologram", "futuristic", "techno", "synthwave"]
+};
+
+function inferThemeFromPrompt(prompt) {
+  const text = String(prompt || "").toLowerCase();
+  let best = null;
+  let bestScore = 0;
+  for (const [theme, words] of Object.entries(THEME_KEYWORDS)) {
+    const score = words.reduce((sum, word) => sum + (text.includes(word) ? 1 : 0), 0);
+    if (score > bestScore) {
+      best = theme;
+      bestScore = score;
+    }
+  }
+  return best; // null when nothing in the prompt implies a theme
+}
 
 function tokenize(value) {
   return String(value || "")
@@ -71,7 +97,9 @@ function normalizeSelection(selection, prompt) {
   const templateId = templates.some(template => template.id === selection?.templateId)
     ? selection.templateId
     : fallback.templateId;
-  const theme = themePresets[selection?.theme] ? selection.theme : fallback.theme;
+  const theme = themePresets[selection?.theme]
+    ? selection.theme
+    : (inferThemeFromPrompt(prompt) ?? fallback.theme);
   const difficulty = ["easy", "normal", "hard", "insane"].includes(selection?.difficulty)
     ? selection.difficulty
     : fallback.difficulty;
@@ -379,7 +407,7 @@ export async function generateGameFromPrompt({
         agent: design.agent,
         selection: {
           templateId: "pure-agent",
-          theme: specs.mood || "neon",
+          theme: specs.mood || inferThemeFromPrompt(prompt) || null,
           difficulty: difficulty || "normal",
           customization: customization || "heavy",
           extra: extra || "none",
@@ -504,6 +532,29 @@ export async function generateGameFromPrompt({
         models
       })
     : null;
+
+  // Real in-game sprites: generate the player/environment/objects artwork BEFORE
+  // code generation so the code model renders them via KULT_RUNTIME.drawAsset
+  // (transparent PNG sprites) instead of drawing shapes. Guarded — if it fails,
+  // the game still builds with procedural visuals. Awaited on purpose: the code
+  // prompt needs the manifest URLs.
+  if (strategy === "pure-agent" && includeCode && includeAssets) {
+    try {
+      logger.log("pipeline.gameplay-assets.start");
+      const gameplayAssets = await generateGameplayAssets(game, { tier: resolvedTier });
+      if (gameplayAssets.status === "ready") {
+        game.gameplayAssets = gameplayAssets;
+        logger.log("pipeline.gameplay-assets.done", {
+          count: Object.keys(gameplayAssets.manifest).length,
+          model: gameplayAssets.model,
+        });
+      } else {
+        warnings.push("Gameplay assets unavailable; building with procedural visuals.");
+      }
+    } catch (error) {
+      warnings.push(`Gameplay assets skipped: ${error.message}`);
+    }
+  }
 
   let refinement = null;
   let assets = null;

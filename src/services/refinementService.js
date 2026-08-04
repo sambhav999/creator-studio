@@ -46,10 +46,15 @@ function attachValidatedRuntimeShell(code) {
 }
 
 function buildPromptBundle({ gamePackage, request, plan, premium = false }) {
+  const hasAssets = Boolean(
+    gamePackage.gameplayAssets?.manifest && Object.keys(gamePackage.gameplayAssets.manifest).length
+  );
   const premiumRules = premium
     ? [
         "ULTRA PREMIUM QUALITY IS MANDATORY:",
-        "- Build polished procedural visuals directly in Canvas/CSS/SVG; do not request or depend on separately generated assets.",
+        hasAssets
+          ? "- Real sprite images are supplied (player/environment/objects). Render them with KULT_RUNTIME.drawAsset and build polished procedural effects AROUND them (particles, impact flashes, HUD, transitions) — do NOT replace the supplied art with drawn shapes."
+          : "- Build polished procedural visuals directly in Canvas/CSS/SVG; do not request or depend on separately generated assets.",
         "- Include purposeful motion: entrance transitions, responsive gameplay animation, impact flashes, particle bursts, and restrained screen shake on major impacts.",
         "- Include a polished start menu, touch-accessible pause/resume, game-over or victory menu, and an obvious tap/click restart flow.",
         "- Include meaningful progression such as increasing difficulty, levels/waves, unlocks, combo milestones, or escalating challenge appropriate to the game.",
@@ -78,6 +83,14 @@ function buildPromptBundle({ gamePackage, request, plan, premium = false }) {
       "Maintain responsive sizing, restart behavior, score/state feedback, and a 60 FPS target.",
       "A validated runtime shell named KULT_RUNTIME is prepended automatically. Use KULT_RUNTIME.canvas, KULT_RUNTIME.ctx, KULT_RUNTIME.input, KULT_RUNTIME.drawAsset(name,...), KULT_RUNTIME.reportScore(score), and KULT_RUNTIME.consumeRestart() instead of recreating those systems.",
       "Focus generated code on game-specific state, rules, update, collision, and render functions; do not regenerate generic canvas setup, resize, input, asset-loader, restart-input, or score-bridge boilerplate.",
+      "GAME FEEL / JUICE — make even a simple game feel premium. Apply the ones that fit this game:",
+      "- Particles: emit short-lived particle bursts on impactful moments (collect, score, destroy, clear, player death). Keep them cheap — small pooled arrays that fade and shrink and are removed when dead.",
+      "- Screen shake: a brief, restrained canvas shake on big hits / clears / death — small amplitude that decays within ~200ms. Never a constant shake.",
+      "- Smooth motion: lerp/ease entities toward their targets instead of snapping; things should glide into place, not teleport.",
+      "- Pop & flash: scale-pop objects when they spawn, flash a color on hit/score, and briefly highlight whatever just changed so feedback is instantly readable.",
+      "- Score & combo feedback: float a rising \"+points\" text at the event location, and escalate the visual intensity (bigger flash, more particles) on streaks, combos, and level-ups.",
+      "- Transitions: ease the start menu, level changes, and the game-over screen in and out (fade/scale), not hard cuts.",
+      "- Keep it performant and safe: cap/pool particles, hold 60fps, scale everything to the current canvas size, and never let effects block input, throw, or break the core loop.",
       ...premiumRules
     ].join("\n"),
     user: [
@@ -91,10 +104,11 @@ function buildPromptBundle({ gamePackage, request, plan, premium = false }) {
       `Gameplay asset manifest: ${JSON.stringify(gamePackage.gameplayAssets?.manifest ?? gamePackage.visuals?.assets ?? {})}`,
       ...(gamePackage.gameplayAssets?.manifest
         ? [
-            "Load every supplied gameplay asset URL with Image objects and render them with drawImage inside the game.",
-            "Use the player asset for the main character, environment as the gameplay background, and objects for visible world props/obstacles.",
+            "Render the supplied sprites with KULT_RUNTIME.drawAsset(name, x, y, w, h) — it already preloads the images the correct way. Prefer this over creating your own Image objects.",
+            "If you DO load an image yourself, use `const img = new Image(); img.src = url;` and DO NOT set img.crossOrigin — these images are for on-canvas display only, and setting crossOrigin makes them fail to load (you get a blank/box instead of the art).",
+            "Use the player asset for the main character, environment as the gameplay background, and objects for visible world props/obstacles/collectibles.",
             "Do not replace supplied assets with circles, rectangles, emoji, Unicode characters, or other placeholder primitives.",
-            "Gracefully draw a temporary fallback only while an image is loading."
+            "Draw a plain fallback only for the brief moment while an image is still loading — never as the permanent look."
           ]
         : []),
       `Creator request: ${request || gamePackage.customization?.prompt || "Create a polished playable version of this game."}`,
@@ -418,7 +432,7 @@ function hardBrokenReason(code, gamePackage) {
 // Each attempt feeds the exact current error back to the agent and asks it to
 // fix ONLY that while keeping the existing gameplay and the creator's change.
 // Escalates to the stronger coding model after the first cheap attempt.
-async function repairEditedModule(code, promptBundle, gamePackage, onProgress, maxAttempts = 3, models = zeroGModels) {
+async function repairEditedModule(code, promptBundle, gamePackage, onProgress, maxAttempts = 2, models = zeroGModels) {
   let current = code;
   const usages = [];
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -472,7 +486,7 @@ async function generateFromSeed(promptBundle, seedCode, model, onProgress, gameP
 
   // Repair in place if anything looks wrong — never regenerate from scratch.
   if (moduleProblem(generatedCode, gamePackage)) {
-    const repaired = await repairEditedModule(generatedCode, promptBundle, gamePackage, onProgress, 3, models);
+    const repaired = await repairEditedModule(generatedCode, promptBundle, gamePackage, onProgress, 2, models);
     usages.push(repaired.usage);
     // Keep the repaired code as long as it isn't WORSE than where we started.
     if (!hardBrokenReason(repaired.code, gamePackage) || repaired.ok) {

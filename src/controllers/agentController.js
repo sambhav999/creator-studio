@@ -147,7 +147,7 @@ function ensureEnhancementLength(enhancedPrompt) {
     .length;
 
   for (const addition of additions) {
-    if (descriptionWords() >= 180) break;
+    if (descriptionWords() >= 280) break;
     result = `${result}\n\n${addition}`;
   }
   return result;
@@ -176,9 +176,9 @@ export async function enhancePrompt(request, response, next) {
       result = await callZeroGChat({
         model,
         temperature: 0.45,
-        // MiniMax-M3 emits a hidden reasoning block before the answer. Leave
-        // enough room for that block plus the requested ~200-word prompt.
-        maxTokens: 1800,
+        // Room for the requested ~300-word spec (plus any model preamble). The
+        // enhancer model is configurable via PROMPT_ENHANCEMENT (default here).
+        maxTokens: 2600,
         timeoutMs: 90000,
         retries: 1,
         messages: [
@@ -190,7 +190,7 @@ export async function enhancePrompt(request, response, next) {
               "The first two lines must use exactly this format:",
               "## Title",
               "**A concise original game title**",
-              "After the title, write 180–220 words of detailed game specification, targeting approximately 200 words.",
+              "After the title, write 280–320 words of detailed game specification, targeting approximately 300 words.",
               "Preserve the user's intended game name, genre, characters, theme, and core mechanic.",
               "Add concrete controls, gameplay loop, scoring, progression, challenge, visual style, sound, responsive mobile layout, and win/lose conditions.",
               "Describe suitable scenery and environment in concrete visual terms: foreground elements, layered background, atmosphere, lighting, environmental motion, obstacles, props, collectibles, character appearance, effects, and a consistent color palette.",
