@@ -91,7 +91,14 @@ function buildPromptBundle({ gamePackage, request, plan, premium = false }) {
       "- Score & combo feedback: float a rising \"+points\" text at the event location, and escalate the visual intensity (bigger flash, more particles) on streaks, combos, and level-ups.",
       "- Transitions: ease the start menu, level changes, and the game-over screen in and out (fade/scale), not hard cuts.",
       "- Keep it performant and safe: cap/pool particles, hold 60fps, scale everything to the current canvas size, and never let effects block input, throw, or break the core loop.",
-      ...premiumRules
+      ...premiumRules,
+      "FINAL SELF-CHECK — before you output, silently re-read your module and fix ONLY genuine defects you find against this list:",
+      "- Every control is wired and actually works on BOTH keyboard and touch (no dead inputs, no half-implemented handlers).",
+      "- Nothing reads a property or index of a value that can be undefined (e.g. board[r][c] before board[r] exists, or entity.x when entity is undefined) — this is the most common crash.",
+      "- Restart fully resets ALL state (score, player, entities, timers, spawn queues, flags, the game-over/win state) and triggers ONLY on explicit input — it must never auto-restart or loop by itself.",
+      "- No uncaught error can occur on load or the first frame; every variable and function used is defined before use.",
+      "- Win/lose conditions are reachable and actually fire.",
+      "STRICT RULES FOR THIS CHECK (it must only ever IMPROVE the game, never degrade it): This is a precise fix pass, NOT a rewrite. Change ONLY lines that are genuinely broken and leave all correct, working code exactly as written. Do NOT add try/catch, redundant null-guards, or defensive boilerplate 'just in case'. Do NOT remove, simplify, or water down any gameplay, mechanics, feature, or the visual juice/polish above. If everything already passes, return the module unchanged."
     ].join("\n"),
     user: [
       `Template: ${gamePackage.templateName}`,
